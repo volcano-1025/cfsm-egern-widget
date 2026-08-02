@@ -29,6 +29,12 @@ const serverOnline = {
 };
 const serverOffline = { ...serverOnline, name: 'JP-02', last_updated: now - 30 * 60000, timestamp: now - 30 * 60000 };
 const serverNoLimit = { ...serverOnline, traffic_limit: '', expire_date: '' };
+const historyRows = Array.from({ length: 30 }, (_, i) => ({
+  timestamp: now - (30 - i) * 120000,
+  cpu: 20 + 40 * Math.abs(Math.sin(i / 6)),
+  ping_ct: 30 + i, ping_cu: 45, ping_cm: null, ping_bd: 120 + (i % 5) * 40,
+  loss_ct: 0, loss_cu: i % 7 === 0 ? 12 : 0, loss_cm: 0, loss_bd: i % 3,
+}));
 
 // ---------- Mock HTTP ----------
 function mockHttp(routes) {
@@ -114,9 +120,10 @@ const scenarios = [
     ['/api/server', () => ({ body: serverOnline })],
   ])],
   ['large 在线', 'systemLarge', BASE_ENV, mockHttp([
+    ['/api/history', () => ({ body: historyRows })],
     ['/api/server', () => ({ body: serverOnline })],
   ])],
-  ['large 无限流量无到期', 'systemLarge', BASE_ENV, mockHttp([
+  ['large 无限流量无到期（history 缺失走兜底）', 'systemLarge', BASE_ENV, mockHttp([
     ['/api/server', () => ({ body: serverNoLimit })],
   ])],
   ['medium 离线', 'systemMedium', BASE_ENV, mockHttp([
