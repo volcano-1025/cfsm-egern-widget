@@ -19,10 +19,10 @@ const C = {
   textSecondary: adapt('#52525B', '#A5A5AA'),
   textTertiary:  adapt('#71717A', '#76767C'),
   hairline:      adapt('#18181B14', '#FFFFFF0F'),
-  pillBg:        adapt('#FFFFFF6B', '#1212146B'),
-  pillBorder:    adapt('#18181B08', '#FFFFFF06'),
   track:         adapt('#E4E4E794', '#26262A94'), // progress-bg @ 0.58
   stripTrack:    adapt('#E4E4E76B', '#26262A6B'), // progress-bg @ 0.42
+  pillBg:        adapt('#F4F4F5', '#26262A'),   // surface-sunken，胶囊可见底色
+  pillBorder:    adapt('#18181B0A', '#FFFFFF08'),
   cpu:           adapt('#3B82F6', '#5D88FF'),
   mem:           adapt('#8B5CF6', '#A35CF5'),
   disk:          adapt('#E97B35', '#F1873D'),
@@ -340,7 +340,8 @@ const SEGMENTS = 18;
  * 18 段指标条：非激活段 track（58% 透明），激活段 alpha = 0.42 + fillLevel*0.56
  * paint: { kind:'solid', color: adaptive } 或 { kind:'gradient', from, to }
  */
-function metricTrack(fraction, paint) {
+function metricTrack(fraction, paint, h) {
+  h = h || 10;
   const active = clamp(fraction ?? 0, 0, 1) * SEGMENTS;
   const children = [];
   for (let i = 0; i < SEGMENTS; i++) {
@@ -352,7 +353,7 @@ function metricTrack(fraction, paint) {
     } else {
       bg = C.track;
     }
-    children.push({ type: 'stack', flex: 1, height: 10, borderRadius: 2, backgroundColor: bg });
+    children.push({ type: 'stack', flex: 1, height: h, borderRadius: 2, backgroundColor: bg });
   }
   return { type: 'stack', direction: 'row', gap: 2, children };
 }
@@ -401,42 +402,42 @@ function metricItem(opts) {
       })],
     });
   }
-  children.push(metricTrack(opts.fraction, opts.paint));
+  children.push(metricTrack(opts.fraction, opts.paint, opts.barH));
   return { type: 'stack', direction: 'column', alignItems: 'start', gap: 7, flex: 1, children };
 }
 /** 双列网格行 */
 function grid2(left, right) {
   return { type: 'stack', direction: 'row', gap: 18, alignItems: 'start', children: [left, right] };
 }
-/** 卡片头：旗帜 + 名称 + 状态点 / 副标题 + 详情按钮 */
-function cardHeader(vm, cfg) {
+/** 卡片头：旗帜 + 名称 + 状态点 + 详情按钮（spacer 驱动左对齐）/ 副标题 */
+function cardHeader(vm, cfg, compact) {
   const dotColor = vm.online ? C.online : C.offline;
-  const titleChildren = [];
-  if (vm.flag) titleChildren.push(txt(vm.flag, { font: { size: 15 } }));
-  titleChildren.push(txt(vm.name, { font: { size: 16, weight: 'semibold' }, textColor: C.textPrimary, minScale: 0.6 }));
   const dot = sfSymbol('circle.fill', 8, dotColor);
   dot.shadowColor = alphaAdapt(dotColor, 0.2);
   dot.shadowRadius = 3;
   dot.shadowOffset = { x: 0, y: 0 };
+  const titleChildren = [];
+  if (vm.flag) titleChildren.push(txt(vm.flag, { font: { size: 15 } }));
+  titleChildren.push(txt(vm.name, { font: { size: 16, weight: 'semibold' }, textColor: C.textPrimary, minScale: 0.6 }));
   titleChildren.push(dot);
-  const titleCol = {
-    type: 'stack', direction: 'column', alignItems: 'start', gap: 6, flex: 1,
-    children: [{ type: 'stack', direction: 'row', alignItems: 'center', gap: 9, children: titleChildren }],
-  };
-  if (vm.subtitle) titleCol.children.push(txt(vm.subtitle, { font: { size: 11, weight: 'semibold' }, textColor: C.textSecondary }));
-  return {
-    type: 'stack', direction: 'row', alignItems: 'start', gap: 12,
-    children: [
-      titleCol,
-      {
-        type: 'stack', width: 34, height: 34, borderRadius: 10,
-        backgroundColor: C.pillBg, borderWidth: 1, borderColor: C.pillBorder,
-        alignItems: 'center',
-        children: [{ type: 'spacer' }, sfSymbol('arrow.up.right', 13, C.textTertiary), { type: 'spacer' }],
-        url: cfg.apiBase,
-      },
-    ],
-  };
+  if (!compact) {
+    titleChildren.push({ type: 'spacer' });
+    titleChildren.push({
+      type: 'stack', width: 34, height: 34, borderRadius: 10,
+      backgroundColor: C.pillBg, borderWidth: 1, borderColor: C.pillBorder,
+      alignItems: 'center',
+      children: [{ type: 'spacer' }, sfSymbol('arrow.up.right', 13, C.textTertiary), { type: 'spacer' }],
+      url: cfg.apiBase,
+    });
+  }
+  const children = [{ type: 'stack', direction: 'row', alignItems: 'center', gap: 9, children: titleChildren }];
+  if (vm.subtitle && !compact) {
+    children.push({
+      type: 'stack', direction: 'row',
+      children: [txt(vm.subtitle, { font: { size: 11, weight: 'semibold' }, textColor: C.textSecondary }), { type: 'spacer' }],
+    });
+  }
+  return { type: 'stack', direction: 'column', alignItems: 'start', gap: 6, children };
 }
 /** 健康块：延迟 / 丢包率（标签行 + 迷你条） */
 function healthBlock(opts) {
@@ -480,16 +481,16 @@ function renderMedium(vm, cfg) {
     url: cfg.apiBase,
     refreshAfter: cfg.refreshAfter,
     children: [
-      cardHeader(vm, cfg),
-      { type: 'spacer', length: 12 },
+      cardHeader(vm, cfg, true),
+      { type: 'spacer', length: 8 },
       grid2(
-        metricItem({ icon: 'cpu', label: 'CPU', value: vm.cpuPctText, unit: '%', fraction: vm.cpuFrac ?? 0, paint: solid(C.cpu) }),
-        metricItem({ icon: 'memorychip', label: '内存', value: vm.ramPctText, unit: '%', fraction: vm.ramFrac ?? 0, paint: solid(C.mem) })
+        metricItem({ icon: 'cpu', label: 'CPU', value: vm.cpuPctText, unit: '%', fraction: vm.cpuFrac ?? 0, paint: solid(C.cpu), barH: 8 }),
+        metricItem({ icon: 'memorychip', label: '内存', value: vm.ramPctText, unit: '%', fraction: vm.ramFrac ?? 0, paint: solid(C.mem), barH: 8 })
       ),
-      { type: 'spacer', length: 12 },
+      { type: 'spacer', length: 8 },
       grid2(
-        metricItem({ icon: 'internaldrive', label: '磁盘', value: vm.diskPctText, unit: '%', fraction: vm.diskFrac ?? 0, paint: solid(C.disk) }),
-        metricItem({ icon: 'gauge.medium', label: '负载', value: vm.loadText, fraction: vm.loadFrac ?? 0, paint: off ? solid(C.textTertiary) : { kind: 'gradient', from: C.cpu, to: C.mem } })
+        metricItem({ icon: 'internaldrive', label: '磁盘', value: vm.diskPctText, unit: '%', fraction: vm.diskFrac ?? 0, paint: solid(C.disk), barH: 8 }),
+        metricItem({ icon: 'gauge.medium', label: '负载', value: vm.loadText, fraction: vm.loadFrac ?? 0, paint: off ? solid(C.textTertiary) : { kind: 'gradient', from: C.cpu, to: C.mem }, barH: 8 })
       ),
       { type: 'spacer' },
       {
