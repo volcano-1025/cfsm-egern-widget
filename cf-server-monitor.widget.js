@@ -100,14 +100,27 @@ function clampPct(v) {
   return Math.max(0, Math.min(100, n));
 }
 
-function parseSizeToBytes(str) {
+// 兼容多种 traffic_limit 写法："1TB" / "500GB" / "500G" / "500"（无单位按 GB 处理）/
+// 纯数字类型（大数字按字节处理，小数字按 GB 处理），并去除千分位逗号
+function parseSizeToBytes(raw) {
+  if (raw === null || raw === undefined || raw === '') return 0;
+  if (typeof raw === 'number') {
+    return raw > 1e6 ? raw : raw * 1024 ** 3;
+  }
+  const str = String(raw).trim().replace(/,/g, '');
   if (!str) return 0;
-  const m = String(str).trim().match(/^([\d.]+)\s*([KMGTP]?B)$/i);
+  const m = str.match(/^([\d.]+)\s*([A-Za-z]*)$/);
   if (!m) return 0;
   const num = parseFloat(m[1]);
-  const unit = m[2].toUpperCase();
-  const mult = { B: 1, KB: 1024, MB: 1024 ** 2, GB: 1024 ** 3, TB: 1024 ** 4, PB: 1024 ** 5 }[unit] || 1;
-  return num * mult;
+  if (isNaN(num)) return 0;
+  let unit = (m[2] || '').toUpperCase().replace(/IB$/, 'B'); // "GiB" -> "GB" 等
+  if (!unit) {
+    // 无单位：大数字视为已经是字节数，小数字视为 GB（常见后台习惯写法）
+    return num >= 1e6 ? num : num * 1024 ** 3;
+  }
+  if (unit.length === 1) unit += 'B'; // "G" -> "GB", "M" -> "MB"
+  const mult = { B: 1, KB: 1024, MB: 1024 ** 2, GB: 1024 ** 3, TB: 1024 ** 4, PB: 1024 ** 5 }[unit];
+  return mult ? num * mult : num * 1024 ** 3;
 }
 
 function humanBytes(bytes) {
@@ -231,6 +244,7 @@ function barRow(pct1, pct2, barW, barH, gap) {
   };
 }
 
+// 无 Uptime Bar 空间时（systemSmall）使用的纯文字行
 function latencyLossRow(ms, lossPct, gap) {
   return {
     type: 'stack', direction: 'row', gap: gap,
@@ -238,6 +252,7 @@ function latencyLossRow(ms, lossPct, gap) {
       {
         type: 'stack', direction: 'row', alignItems: 'center', flex: 1, gap: 4,
         children: [
+          { type: 'image', src: 'sf-symbol:clock', width: 10, height: 10, color: MUTED },
           textMuted('延迟', 'caption2'),
           { type: 'spacer' },
           { type: 'text', text: ms == null ? '-' : Math.round(ms) + 'ms', font: { size: 'caption1', weight: 'semibold' }, textColor: latencyColor(ms) },
@@ -246,7 +261,8 @@ function latencyLossRow(ms, lossPct, gap) {
       {
         type: 'stack', direction: 'row', alignItems: 'center', flex: 1, gap: 4,
         children: [
-          textMuted('丢包', 'caption2'),
+          { type: 'image', src: 'sf-symbol:wifi.exclamationmark', width: 10, height: 10, color: MUTED },
+          textMuted('丢包率', 'caption2'),
           { type: 'spacer' },
           { type: 'text', text: lossPct == null ? '-' : lossPct.toFixed(1) + '%', font: { size: 'caption1', weight: 'semibold' }, textColor: lossColor(lossPct) },
         ],
@@ -255,14 +271,29 @@ function latencyLossRow(ms, lossPct, gap) {
   };
 }
 
-// 单条 Uptime Bar：左侧固定宽度标签 + 右侧 20 格色块
-function uptimeRow(label, colors, totalW, barH, labelW, gap) {
-  const barW = Math.max(0, totalW - labelW - gap);
-  return {
-    type: 'stack', direction: 'row', alignItems: 'center', gap: gap,
+// 左右两栏：每栏「图标+标签+数值」在上，对应 20 格 Uptime Bar 在下
+function delayLossColumns(ms, lossPct, delayBlocks, lossBlocks, colW, barH, gap) {
+  const column = (icon, label, valueText, valueColor, blocks) => ({
+    type: 'stack', direction: 'column', flex: 1, gap: 5,
     children: [
-      { type: 'stack', width: labelW, children: [textMuted(label, 'caption2')] },
-      { type: 'image', src: svgUptimeBar(colors, barW, barH), width: barW, height: barH },
+      {
+        type: 'stack', direction: 'row', alignItems: 'center', gap: 4,
+        children: [
+          { type: 'image', src: 'sf-symbol:' + icon, width: 11, height: 11, color: MUTED },
+          textMuted(label, 'caption2'),
+          { type: 'spacer' },
+          { type: 'text', text: valueText, font: { size: 'callout', weight: 'bold' }, textColor: valueColor },
+        ],
+      },
+      { type: 'image', src: svgUptimeBar(blocks, colW, barH), width: colW, height: barH },
+    ],
+  });
+
+  return {
+    type: 'stack', direction: 'row', gap: gap,
+    children: [
+      column('clock', '延迟', ms == null ? '-' : Math.round(ms) + 'ms', latencyColor(ms), delayBlocks),
+      column('wifi.exclamationmark', '丢包率', lossPct == null ? '-' : lossPct.toFixed(1) + '%', lossColor(lossPct), lossBlocks),
     ],
   };
 }
@@ -380,14 +411,15 @@ export default async function (ctx) {
       metricPair('gauge', '负载', loadPct, load5 == null ? null : load5.toFixed(2)),
     ] },
     barRow(diskPct, loadPct, barW, 6, rowGap),
-    latencyLossRow(avgPing, avgLoss, rowGap),
   ];
 
-  if (family === 'systemMedium' || family === 'systemLarge') {
+  if (family === 'systemSmall') {
+    children.push(latencyLossRow(avgPing, avgLoss, rowGap));
+  } else {
     const dBlocks = delayBlocks || new Array(20).fill(COLOR_OFFLINE);
     const lBlocks = lossBlocks || new Array(20).fill(COLOR_OFFLINE);
-    children.push(uptimeRow('延迟', dBlocks, innerW, 12, 28, 6));
-    children.push(uptimeRow('丢包', lBlocks, innerW, 12, 28, 6));
+    const colW = Math.floor((innerW - rowGap) / 2);
+    children.push(delayLossColumns(avgPing, avgLoss, dBlocks, lBlocks, colW, 20, rowGap));
   }
 
   if (family === 'systemLarge') {
