@@ -81,6 +81,27 @@ function svgBar(pct, color, w, h) {
     "</svg>";
 }
 
+// 关键修复：Egern 里两个独立 image 元素塞进同一个 row stack 时，即使各自都声明了
+// width，实际渲染出来还是会被拉伸到跟 flex:1 的文字行差不多宽（推测是该渲染器对
+// "无 flex 的多个 image 子元素" 的宽度处理跟文档描述不一致）。而 Uptime Bar / 流量条
+// 用的是"单张 SVG 图片内部画多个色块"，宽度从头到尾都是准的。所以这里把 CPU/内存、
+// 磁盘/负载这两条并排的进度条也改成同一个思路：合并成一张 SVG，在里面用绝对坐标画
+// 两段进度条，从根源上绕开"多个 image 元素分宽度"这件事。
+function svgPairedBar(pct1, pct2, totalW, h, midGap, ratio) {
+  const halfW = (totalW - midGap) / 2;
+  const barLen = Math.max(10, halfW * ratio);
+  const r = h / 2;
+  const seg = (x0, pct) => {
+    const p = Math.max(0, Math.min(100, pct || 0));
+    const fillW = (barLen * p / 100).toFixed(1);
+    const color = usageColor(pct);
+    return "<rect x='" + x0.toFixed(1) + "' y='0' width='" + barLen.toFixed(1) + "' height='" + h + "' rx='" + r + "' fill='rgba(150,150,150,0.28)'/>" +
+      "<rect x='" + x0.toFixed(1) + "' y='0' width='" + fillW + "' height='" + h + "' rx='" + r + "' fill='" + color + "'/>";
+  };
+  const rects = seg(0, pct1) + seg(halfW + midGap, pct2);
+  return "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 " + totalW + " " + h + "'>" + rects + "</svg>";
+}
+
 function svgUptimeBar(colors, w, h) {
   const n = colors.length;
   const gap = 2;
@@ -264,16 +285,8 @@ function metricRow(cfg, items) {
   };
 }
 
-function barRow(pct1, pct2, barW, barH, gap, ratio) {
-  const w = Math.max(10, Math.floor(barW * ratio));
-  const totalW = w * 2 + gap;
-  return {
-    type: 'stack', direction: 'row', gap: gap, width: totalW,
-    children: [
-      { type: 'image', src: svgBar(pct1, usageColor(pct1), w, barH), width: w, height: barH },
-      { type: 'image', src: svgBar(pct2, usageColor(pct2), w, barH), width: w, height: barH },
-    ],
-  };
+function barRow(pct1, pct2, totalW, barH, gap, ratio) {
+  return { type: 'image', src: svgPairedBar(pct1, pct2, totalW, barH, gap, ratio), width: totalW, height: barH };
 }
 
 // 左右两栏：每栏「图标(+标签)+数值」在上，对应 20 格 Uptime Bar 在下
@@ -404,7 +417,6 @@ export default async function (ctx) {
   }
 
   const innerW = cfg.width - cfg.padding * 2;
-  const barW = Math.floor((innerW - cfg.gap) / 2);
 
   const children = [
     headerRow(server.region, server.name, isOnline, lastUpdated),
@@ -412,12 +424,12 @@ export default async function (ctx) {
       { icon: 'cpu', label: 'CPU', color: usageColor(cpuPct), valueText: cpuPct == null ? null : cpuPct.toFixed(2) + '%' },
       { icon: 'memorychip', label: '内存', color: usageColor(ramPct), valueText: ramPct == null ? null : ramPct.toFixed(2) + '%' },
     ]),
-    barRow(cpuPct, ramPct, barW, cfg.barH, cfg.gap, cfg.barRatio),
+    barRow(cpuPct, ramPct, innerW, cfg.barH, cfg.gap, cfg.barRatio),
     metricRow(cfg, [
       { icon: 'internaldrive', label: '磁盘', color: usageColor(diskPct), valueText: diskPct == null ? null : diskPct.toFixed(2) + '%' },
       { icon: 'gauge', label: '负载', color: usageColor(loadPct), valueText: load5 == null ? null : load5.toFixed(2) },
     ]),
-    barRow(diskPct, loadPct, barW, cfg.barH, cfg.gap, cfg.barRatio),
+    barRow(diskPct, loadPct, innerW, cfg.barH, cfg.gap, cfg.barRatio),
   ];
 
   if (family === 'systemSmall') {
