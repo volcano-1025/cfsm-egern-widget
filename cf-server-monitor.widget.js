@@ -234,17 +234,17 @@ function computeLatencyAndBlocks(history, isp, now, currentPing, currentLoss) {
 const SIZE_CONFIG = {
   systemSmall: {
     width: 155, padding: 14, colGap: 5, tightGap: 3, outerGap: 9,
-    barH: 5, uptimeH: 10, barRatio: 0.72, trafficInset: 8,
+    barH: 5, uptimeH: 10, barRatio: 1, trafficInset: 0,
     showLabel: false, valueFont: 'caption1', labelFont: 'caption2',
   },
   systemMedium: {
     width: 329, padding: 16, colGap: 5, tightGap: 3, outerGap: 7,
-    barH: 5, uptimeH: 12, barRatio: 0.82, trafficInset: 10,
+    barH: 5, uptimeH: 12, barRatio: 1, trafficInset: 0,
     showLabel: true, valueFont: 'caption1', labelFont: 'caption2',
   },
   systemLarge: {
     width: 329, padding: 18, colGap: 9, tightGap: 5, outerGap: 16,
-    barH: 6, uptimeH: 16, barRatio: 0.82, trafficInset: 10,
+    barH: 6, uptimeH: 16, barRatio: 1, trafficInset: 0,
     showLabel: true, valueFont: 'callout', labelFont: 'caption2',
   },
 };
