@@ -233,15 +233,18 @@ function computeLatencyAndBlocks(history, isp, now, currentPing, currentLoss) {
 
 const SIZE_CONFIG = {
   systemSmall: {
-    width: 155, padding: 14, gap: 5, barH: 5, uptimeH: 10, barRatio: 0.72, trafficInset: 8,
+    width: 155, padding: 14, colGap: 5, tightGap: 3, outerGap: 9,
+    barH: 5, uptimeH: 10, barRatio: 0.72, trafficInset: 8,
     showLabel: false, valueFont: 'caption1', labelFont: 'caption2',
   },
   systemMedium: {
-    width: 329, padding: 16, gap: 5, barH: 5, uptimeH: 12, barRatio: 0.82, trafficInset: 10,
+    width: 329, padding: 16, colGap: 5, tightGap: 3, outerGap: 7,
+    barH: 5, uptimeH: 12, barRatio: 0.82, trafficInset: 10,
     showLabel: true, valueFont: 'caption1', labelFont: 'caption2',
   },
   systemLarge: {
-    width: 329, padding: 18, gap: 9, barH: 6, uptimeH: 16, barRatio: 0.82, trafficInset: 10,
+    width: 329, padding: 18, colGap: 9, tightGap: 5, outerGap: 16,
+    barH: 6, uptimeH: 16, barRatio: 0.82, trafficInset: 10,
     showLabel: true, valueFont: 'callout', labelFont: 'caption2',
   },
 };
@@ -278,7 +281,7 @@ function metricCompact(icon, color, valueText, cfg) {
 
 function metricRow(cfg, items) {
   return {
-    type: 'stack', direction: 'row', gap: cfg.gap,
+    type: 'stack', direction: 'row', gap: cfg.colGap,
     children: items.map((it) => cfg.showLabel
       ? metricWithLabel(it.icon, it.label, it.color, it.valueText, cfg)
       : metricCompact(it.icon, it.color, it.valueText, cfg)),
@@ -308,7 +311,7 @@ function delayLossColumns(ms, lossPct, delayBlocks, lossBlocks, colW, cfg) {
   });
 
   return {
-    type: 'stack', direction: 'row', gap: cfg.gap,
+    type: 'stack', direction: 'row', gap: cfg.colGap,
     children: [
       column('clock', '延迟', ms == null ? '-' : Math.round(ms) + 'ms', latencyColor(ms), delayBlocks),
       column('wifi.exclamationmark', '丢包率', lossPct == null ? '-' : lossPct.toFixed(1) + '%', lossColor(lossPct), lossBlocks),
@@ -420,21 +423,31 @@ export default async function (ctx) {
 
   const children = [
     headerRow(server.region, server.name, isOnline, lastUpdated),
-    metricRow(cfg, [
-      { icon: 'cpu', label: 'CPU', color: usageColor(cpuPct), valueText: cpuPct == null ? null : cpuPct.toFixed(2) + '%' },
-      { icon: 'memorychip', label: '内存', color: usageColor(ramPct), valueText: ramPct == null ? null : ramPct.toFixed(2) + '%' },
-    ]),
-    barRow(cpuPct, ramPct, innerW, cfg.barH, cfg.gap, cfg.barRatio),
-    metricRow(cfg, [
-      { icon: 'internaldrive', label: '磁盘', color: usageColor(diskPct), valueText: diskPct == null ? null : diskPct.toFixed(2) + '%' },
-      { icon: 'gauge', label: '负载', color: usageColor(loadPct), valueText: load5 == null ? null : load5.toFixed(2) },
-    ]),
-    barRow(diskPct, loadPct, innerW, cfg.barH, cfg.gap, cfg.barRatio),
+    {
+      type: 'stack', direction: 'column', gap: cfg.tightGap,
+      children: [
+        metricRow(cfg, [
+          { icon: 'cpu', label: 'CPU', color: usageColor(cpuPct), valueText: cpuPct == null ? null : cpuPct.toFixed(2) + '%' },
+          { icon: 'memorychip', label: '内存', color: usageColor(ramPct), valueText: ramPct == null ? null : ramPct.toFixed(2) + '%' },
+        ]),
+        barRow(cpuPct, ramPct, innerW, cfg.barH, cfg.colGap, cfg.barRatio),
+      ],
+    },
+    {
+      type: 'stack', direction: 'column', gap: cfg.tightGap,
+      children: [
+        metricRow(cfg, [
+          { icon: 'internaldrive', label: '磁盘', color: usageColor(diskPct), valueText: diskPct == null ? null : diskPct.toFixed(2) + '%' },
+          { icon: 'gauge', label: '负载', color: usageColor(loadPct), valueText: load5 == null ? null : load5.toFixed(2) },
+        ]),
+        barRow(diskPct, loadPct, innerW, cfg.barH, cfg.colGap, cfg.barRatio),
+      ],
+    },
   ];
 
   if (family === 'systemSmall') {
     children.push({
-      type: 'stack', direction: 'row', gap: cfg.gap,
+      type: 'stack', direction: 'row', gap: cfg.colGap,
       children: [
         metricCompact('clock', latencyColor(latestPing), latestPing == null ? null : Math.round(latestPing) + 'ms', cfg),
         metricCompact('wifi.exclamationmark', lossColor(avgLoss), avgLoss == null ? null : avgLoss.toFixed(1) + '%', cfg),
@@ -443,9 +456,7 @@ export default async function (ctx) {
   } else {
     const dBlocks = delayBlocks || new Array(20).fill(COLOR_OFFLINE);
     const lBlocks = lossBlocks || new Array(20).fill(COLOR_OFFLINE);
-    const colW = Math.floor((innerW - cfg.gap) / 2);
-
-    if (family === 'systemLarge') children.push({ type: 'spacer' });
+    const colW = Math.floor((innerW - cfg.colGap) / 2);
     children.push(delayLossColumns(latestPing, avgLoss, dBlocks, lBlocks, colW, cfg));
   }
 
@@ -464,31 +475,35 @@ export default async function (ctx) {
     // 用量很小时（比如只用了 0.16%），99.8% 的填充几乎看不出缺口，
     // 所以只要 usedBytes > 0 就强制留出一个至少可见的最小缺口，代表"已用"的部分。
     let remainPct = usedPct == null ? null : Math.max(0, 100 - usedPct);
-
-    children.push({ type: 'spacer' });
-    children.push({
-      type: 'stack', direction: 'row', alignItems: 'center', gap: 6,
-      children: [
-        textMuted('剩余流量', cfg.labelFont),
-        { type: 'text', text: remainBytes == null ? '-' : humanBytes(remainBytes), font: { size: cfg.valueFont, weight: 'bold' }, textColor: usageColor(usedPct) },
-        { type: 'spacer' },
-        { type: 'text', text: limitBytes > 0 ? humanBytes(usedBytes) + ' / ' + humanBytes(limitBytes) : '-', font: { size: 'caption2' }, textColor: MUTED },
-      ],
-    });
     const trafficBarW = Math.max(20, innerW - cfg.trafficInset);
     if (remainPct != null && usedBytes > 0) {
       const MIN_GAP_PX = 5; // "已用"缺口至少保留这么宽，避免用量太小时完全看不见
       const minGapPct = (MIN_GAP_PX / trafficBarW) * 100;
       remainPct = Math.min(remainPct, 100 - minGapPct);
     }
-    children.push({ type: 'image', src: svgBar(remainPct, usageColor(usedPct), trafficBarW, cfg.barH), width: trafficBarW, height: cfg.barH });
+
+    children.push({
+      type: 'stack', direction: 'column', gap: cfg.tightGap,
+      children: [
+        {
+          type: 'stack', direction: 'row', alignItems: 'center', gap: 6,
+          children: [
+            textMuted('剩余流量', cfg.labelFont),
+            { type: 'text', text: remainBytes == null ? '-' : humanBytes(remainBytes), font: { size: cfg.valueFont, weight: 'bold' }, textColor: usageColor(usedPct) },
+            { type: 'spacer' },
+            { type: 'text', text: limitBytes > 0 ? humanBytes(usedBytes) + ' / ' + humanBytes(limitBytes) : '-', font: { size: 'caption2' }, textColor: MUTED },
+          ],
+        },
+        { type: 'image', src: svgBar(remainPct, usageColor(usedPct), trafficBarW, cfg.barH), width: trafficBarW, height: cfg.barH },
+      ],
+    });
   }
 
   return {
     type: 'widget',
     refreshAfter: new Date(now + 60 * 1000).toISOString(),
     padding: cfg.padding,
-    gap: cfg.gap,
+    gap: cfg.outerGap,
     backgroundGradient: {
       type: 'linear',
       colors: isOnline ? ['#16213E', '#0F3460'] : ['#2B2B2F', '#1C1C1E'],
