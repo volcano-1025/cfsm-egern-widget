@@ -11,10 +11,13 @@
  *   ISP_LINE   可选  展示延迟/丢包率所用的运营商线路，取值 ct(电信) / cu(联通) / cm(移动) / bd(BD 线路)，默认 ct
  *                    若该线路完全没有数据，会自动尝试其余线路兜底展示
  *
- * 布局：
- *   systemSmall  : 6 行（地区主机名 / CPU+内存 / 对应进度条 / 磁盘+负载 / 对应进度条 / 延迟+丢包）
- *   systemMedium : 在 small 基础上 + 延迟 Uptime Bar（20 格）+ 丢包 Uptime Bar（20 格，两条独立）
- *   systemLarge  : 在 medium 基础上 + 剩余流量/已用/总量 + 流量进度条
+ * 布局与尺寸说明：
+ *   systemSmall  (155×155pt) : 6 行，空间最紧张 —— 不显示 CPU/内存/磁盘/负载/延迟/丢包率 这些文字标签，
+ *                              只保留「图标 + 数值」，避免文字把数值挤出去截断成 "..."
+ *   systemMedium (329×155pt) : 宽度够但高度和 small 一样矮，因此整体内边距 / 行间距 / 进度条粗细
+ *                              都比 large 收紧一档，保留完整文字标签，7 行内容也不会溢出
+ *   systemLarge  (329×345pt) : 高度充裕，用完整文字标签 + 宽松间距，并在「性能区块」「网络区块」
+ *                              「流量区块」之间插入弹性空白，让整体重心均衡，而不是纯粹拉大固定间距
  *
  * 判定规则：
  *   - last_updated 距当前超过 3 分钟视为离线
@@ -23,6 +26,7 @@
  *   - 延迟 / 丢包率取 /api/history/all?hours=1 中对应运营商字段的均值；历史缺失该字段时回退为 /api/server 当前值；
  *     若选定线路完全无数据，自动尝试其余线路
  *   - Uptime Bar 每种指标各 20 格，每格约代表 3 分钟；格内无数据视为离线（灰色）
+ *   - 剩余流量进度条为「倒计」样式：填充长度 = 剩余百分比（越用越短），颜色仍按用量的危险程度着色
  *
  * 配色分级（绿色 → 嫩绿色 → 黄绿色 → 黄色 → 红色）：
  *   usageColor()   用于 CPU/内存/磁盘/负载/流量 百分比进度条
@@ -34,6 +38,7 @@
 
 const COLOR_STEPS = ['#2ECC71', '#7ED957', '#C9D93B', '#F1C40F', '#E74C3C'];
 const COLOR_OFFLINE = '#8E8E93';
+const MUTED = { light: '#6B6B6F', dark: '#9A9A9E' };
 
 function usageColor(pct) {
   if (pct == null || isNaN(pct)) return COLOR_OFFLINE;
@@ -101,7 +106,7 @@ function clampPct(v) {
 }
 
 // 兼容多种 traffic_limit 写法："1TB" / "500GB" / "500G" / "500"（无单位按 GB 处理）/
-// 纯数字类型（大数字按字节处理，小数字按 GB 处理），并去除千分位逗号
+// "GiB" 类型写法 / 纯数字类型（大数字按字节处理，小数字按 GB 处理），并去除千分位逗号
 function parseSizeToBytes(raw) {
   if (raw === null || raw === undefined || raw === '') return 0;
   if (typeof raw === 'number') {
@@ -115,7 +120,6 @@ function parseSizeToBytes(raw) {
   if (isNaN(num)) return 0;
   let unit = (m[2] || '').toUpperCase().replace(/IB$/, 'B'); // "GiB" -> "GB" 等
   if (!unit) {
-    // 无单位：大数字视为已经是字节数，小数字视为 GB（常见后台习惯写法）
     return num >= 1e6 ? num : num * 1024 ** 3;
   }
   if (unit.length === 1) unit += 'B'; // "G" -> "GB", "M" -> "MB"
@@ -200,37 +204,61 @@ function computeLatencyAndBlocks(history, isp, now, currentPing, currentLoss) {
   return { avgPing, avgLoss, delayBlocks, lossBlocks };
 }
 
-// ------------------------- DSL 组件 -------------------------
+// ------------------------- 尺寸配置 -------------------------
+// small / medium 的物理高度都只有 ~155pt，large 有 ~345pt，因此三档的内边距、
+// 行间距、进度条粗细分开配置，而不是简单地按宽度一刀切。
 
-const MUTED = { light: '#6B6B6F', dark: '#9A9A9E' };
+const SIZE_CONFIG = {
+  systemSmall: {
+    width: 155, padding: 14, gap: 5, barH: 5, uptimeH: 10,
+    showLabel: false, valueFont: 'caption1', labelFont: 'caption2',
+  },
+  systemMedium: {
+    width: 329, padding: 12, gap: 4, barH: 5, uptimeH: 12,
+    showLabel: true, valueFont: 'caption1', labelFont: 'caption2',
+  },
+  systemLarge: {
+    width: 329, padding: 18, gap: 9, barH: 6, uptimeH: 16,
+    showLabel: true, valueFont: 'callout', labelFont: 'caption2',
+  },
+};
+
+// ------------------------- DSL 组件 -------------------------
 
 function textMuted(text, size) {
   return { type: 'text', text: text, font: { size: size || 'caption2' }, textColor: MUTED };
 }
 
-function iconLabel(icon, label) {
+// 有文字标签版本（medium / large）：图标 + 标签 + 弹簧 + 数值
+function metricWithLabel(icon, label, color, valueText, cfg) {
   return {
-    type: 'stack', direction: 'row', alignItems: 'center', gap: 3,
+    type: 'stack', direction: 'row', alignItems: 'center', flex: 1, gap: 4,
     children: [
-      { type: 'image', src: 'sf-symbol:' + icon, width: 10, height: 10, color: MUTED },
-      textMuted(label, 'caption2'),
+      { type: 'image', src: 'sf-symbol:' + icon, width: 11, height: 11, color: MUTED },
+      textMuted(label, cfg.labelFont),
+      { type: 'spacer' },
+      { type: 'text', text: valueText == null ? '-' : valueText, font: { size: cfg.valueFont, weight: 'bold' }, textColor: color },
     ],
   };
 }
 
-function metricPair(icon, label, colorPct, valueText) {
+// 无文字标签版本（small）：图标 + 数值，避免窄空间里文字把数值挤成 "..."
+function metricCompact(icon, color, valueText, cfg) {
   return {
     type: 'stack', direction: 'row', alignItems: 'center', flex: 1, gap: 4,
     children: [
-      iconLabel(icon, label),
-      { type: 'spacer' },
-      {
-        type: 'text',
-        text: valueText == null ? '-' : valueText,
-        font: { size: 'caption1', weight: 'semibold' },
-        textColor: usageColor(colorPct),
-      },
+      { type: 'image', src: 'sf-symbol:' + icon, width: 11, height: 11, color: MUTED },
+      { type: 'text', text: valueText == null ? '-' : valueText, font: { size: cfg.valueFont, weight: 'bold' }, textColor: color },
     ],
+  };
+}
+
+function metricRow(cfg, items) {
+  return {
+    type: 'stack', direction: 'row', gap: cfg.gap,
+    children: items.map((it) => cfg.showLabel
+      ? metricWithLabel(it.icon, it.label, it.color, it.valueText, cfg)
+      : metricCompact(it.icon, it.color, it.valueText, cfg)),
   };
 }
 
@@ -244,53 +272,26 @@ function barRow(pct1, pct2, barW, barH, gap) {
   };
 }
 
-// 无 Uptime Bar 空间时（systemSmall）使用的纯文字行
-function latencyLossRow(ms, lossPct, gap) {
-  return {
-    type: 'stack', direction: 'row', gap: gap,
-    children: [
-      {
-        type: 'stack', direction: 'row', alignItems: 'center', flex: 1, gap: 4,
-        children: [
-          { type: 'image', src: 'sf-symbol:clock', width: 10, height: 10, color: MUTED },
-          textMuted('延迟', 'caption2'),
-          { type: 'spacer' },
-          { type: 'text', text: ms == null ? '-' : Math.round(ms) + 'ms', font: { size: 'caption1', weight: 'semibold' }, textColor: latencyColor(ms) },
-        ],
-      },
-      {
-        type: 'stack', direction: 'row', alignItems: 'center', flex: 1, gap: 4,
-        children: [
-          { type: 'image', src: 'sf-symbol:wifi.exclamationmark', width: 10, height: 10, color: MUTED },
-          textMuted('丢包率', 'caption2'),
-          { type: 'spacer' },
-          { type: 'text', text: lossPct == null ? '-' : lossPct.toFixed(1) + '%', font: { size: 'caption1', weight: 'semibold' }, textColor: lossColor(lossPct) },
-        ],
-      },
-    ],
-  };
-}
-
-// 左右两栏：每栏「图标+标签+数值」在上，对应 20 格 Uptime Bar 在下
-function delayLossColumns(ms, lossPct, delayBlocks, lossBlocks, colW, barH, gap) {
+// 左右两栏：每栏「图标(+标签)+数值」在上，对应 20 格 Uptime Bar 在下
+function delayLossColumns(ms, lossPct, delayBlocks, lossBlocks, colW, cfg) {
   const column = (icon, label, valueText, valueColor, blocks) => ({
-    type: 'stack', direction: 'column', flex: 1, gap: 5,
+    type: 'stack', direction: 'column', flex: 1, gap: 4,
     children: [
       {
         type: 'stack', direction: 'row', alignItems: 'center', gap: 4,
         children: [
           { type: 'image', src: 'sf-symbol:' + icon, width: 11, height: 11, color: MUTED },
-          textMuted(label, 'caption2'),
+          cfg.showLabel ? textMuted(label, cfg.labelFont) : null,
           { type: 'spacer' },
-          { type: 'text', text: valueText, font: { size: 'callout', weight: 'bold' }, textColor: valueColor },
-        ],
+          { type: 'text', text: valueText, font: { size: cfg.valueFont, weight: 'bold' }, textColor: valueColor },
+        ].filter(Boolean),
       },
-      { type: 'image', src: svgUptimeBar(blocks, colW, barH), width: colW, height: barH },
+      { type: 'image', src: svgUptimeBar(blocks, colW, cfg.uptimeH), width: colW, height: cfg.uptimeH },
     ],
   });
 
   return {
-    type: 'stack', direction: 'row', gap: gap,
+    type: 'stack', direction: 'row', gap: cfg.gap,
     children: [
       column('clock', '延迟', ms == null ? '-' : Math.round(ms) + 'ms', latencyColor(ms), delayBlocks),
       column('wifi.exclamationmark', '丢包率', lossPct == null ? '-' : lossPct.toFixed(1) + '%', lossColor(lossPct), lossBlocks),
@@ -330,6 +331,7 @@ export default async function (ctx) {
   const SERVER_ID = ctx.env.SERVER_ID || '';
   const ISP_PREF = (ctx.env.ISP_LINE || 'ct').toLowerCase();
   const family = ctx.widgetFamily;
+  const cfg = SIZE_CONFIG[family] || SIZE_CONFIG.systemSmall;
 
   if (!BASE_URL || !SERVER_ID) {
     return errorWidget('请在小组件 env 中配置 BASE_URL 和 SERVER_ID');
@@ -387,39 +389,38 @@ export default async function (ctx) {
     avgLoss = null;
   }
 
-  // 不同尺寸下的内边距 / 内容宽度 / 进度条宽度（点）
-  let innerW, barW, rowGap, padding;
-  if (family === 'systemSmall') {
-    padding = 16; rowGap = 5;
-    innerW = 155 - padding * 2; // ≈123
-    barW = Math.floor((innerW - rowGap) / 2);
-  } else {
-    padding = 18; rowGap = 8;
-    innerW = 329 - padding * 2; // ≈293
-    barW = Math.floor((innerW - rowGap) / 2);
-  }
+  const innerW = cfg.width - cfg.padding * 2;
+  const barW = Math.floor((innerW - cfg.gap) / 2);
 
   const children = [
     headerRow(server.region, server.name, isOnline),
-    { type: 'stack', direction: 'row', gap: rowGap, children: [
-      metricPair('cpu', 'CPU', cpuPct, cpuPct == null ? null : cpuPct.toFixed(2) + '%'),
-      metricPair('memorychip', '内存', ramPct, ramPct == null ? null : ramPct.toFixed(2) + '%'),
-    ] },
-    barRow(cpuPct, ramPct, barW, 6, rowGap),
-    { type: 'stack', direction: 'row', gap: rowGap, children: [
-      metricPair('internaldrive', '磁盘', diskPct, diskPct == null ? null : diskPct.toFixed(2) + '%'),
-      metricPair('gauge', '负载', loadPct, load5 == null ? null : load5.toFixed(2)),
-    ] },
-    barRow(diskPct, loadPct, barW, 6, rowGap),
+    metricRow(cfg, [
+      { icon: 'cpu', label: 'CPU', color: usageColor(cpuPct), valueText: cpuPct == null ? null : cpuPct.toFixed(2) + '%' },
+      { icon: 'memorychip', label: '内存', color: usageColor(ramPct), valueText: ramPct == null ? null : ramPct.toFixed(2) + '%' },
+    ]),
+    barRow(cpuPct, ramPct, barW, cfg.barH, cfg.gap),
+    metricRow(cfg, [
+      { icon: 'internaldrive', label: '磁盘', color: usageColor(diskPct), valueText: diskPct == null ? null : diskPct.toFixed(2) + '%' },
+      { icon: 'chart.bar.fill', label: '负载', color: usageColor(loadPct), valueText: load5 == null ? null : load5.toFixed(2) },
+    ]),
+    barRow(diskPct, loadPct, barW, cfg.barH, cfg.gap),
   ];
 
   if (family === 'systemSmall') {
-    children.push(latencyLossRow(avgPing, avgLoss, rowGap));
+    children.push({
+      type: 'stack', direction: 'row', gap: cfg.gap,
+      children: [
+        metricCompact('clock', latencyColor(avgPing), avgPing == null ? null : Math.round(avgPing) + 'ms', cfg),
+        metricCompact('wifi.exclamationmark', lossColor(avgLoss), avgLoss == null ? null : avgLoss.toFixed(1) + '%', cfg),
+      ],
+    });
   } else {
     const dBlocks = delayBlocks || new Array(20).fill(COLOR_OFFLINE);
     const lBlocks = lossBlocks || new Array(20).fill(COLOR_OFFLINE);
-    const colW = Math.floor((innerW - rowGap) / 2);
-    children.push(delayLossColumns(avgPing, avgLoss, dBlocks, lBlocks, colW, 20, rowGap));
+    const colW = Math.floor((innerW - cfg.gap) / 2);
+
+    if (family === 'systemLarge') children.push({ type: 'spacer' });
+    children.push(delayLossColumns(avgPing, avgLoss, dBlocks, lBlocks, colW, cfg));
   }
 
   if (family === 'systemLarge') {
@@ -432,25 +433,28 @@ export default async function (ctx) {
       default: usedBytes = (toNum(server.net_rx_monthly) || 0) + (toNum(server.net_tx_monthly) || 0);
     }
     const remainBytes = limitBytes > 0 ? Math.max(0, limitBytes - usedBytes) : null;
-    const trafficPct = limitBytes > 0 ? clampPct((usedBytes / limitBytes) * 100) : null;
+    const usedPct = limitBytes > 0 ? clampPct((usedBytes / limitBytes) * 100) : null;
+    // "倒计"：填充长度按剩余量算，用得越多条越短；颜色仍按用量的危险程度着色
+    const remainPct = usedPct == null ? null : Math.max(0, 100 - usedPct);
 
+    children.push({ type: 'spacer' });
     children.push({
       type: 'stack', direction: 'row', alignItems: 'center', gap: 6,
       children: [
-        textMuted('剩余流量', 'caption2'),
-        { type: 'text', text: remainBytes == null ? '-' : humanBytes(remainBytes), font: { size: 'caption1', weight: 'semibold' }, textColor: usageColor(trafficPct) },
+        textMuted('剩余流量', cfg.labelFont),
+        { type: 'text', text: remainBytes == null ? '-' : humanBytes(remainBytes), font: { size: cfg.valueFont, weight: 'bold' }, textColor: usageColor(usedPct) },
         { type: 'spacer' },
         { type: 'text', text: limitBytes > 0 ? humanBytes(usedBytes) + ' / ' + humanBytes(limitBytes) : '-', font: { size: 'caption2' }, textColor: MUTED },
       ],
     });
-    children.push({ type: 'image', src: svgBar(trafficPct, usageColor(trafficPct), innerW, 6), width: innerW, height: 6 });
+    children.push({ type: 'image', src: svgBar(remainPct, usageColor(usedPct), innerW, cfg.barH), width: innerW, height: cfg.barH });
   }
 
   return {
     type: 'widget',
     refreshAfter: new Date(now + 60 * 1000).toISOString(),
-    padding: padding,
-    gap: family === 'systemSmall' ? 6 : 8,
+    padding: cfg.padding,
+    gap: cfg.gap,
     backgroundGradient: {
       type: 'linear',
       colors: isOnline ? ['#16213E', '#0F3460'] : ['#2B2B2F', '#1C1C1E'],
