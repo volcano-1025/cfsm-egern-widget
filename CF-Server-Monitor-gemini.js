@@ -1,5 +1,5 @@
 /**
- * CF-Server-Monitor → Egern 小组件适配脚本 (Visual Refresh v2)
+ * CF-Server-Monitor → Egern 小组件适配脚本 (Layout Refined v3)
  * ------------------------------------------------------------
  * 数据来源：CF-Server-Monitor 第三方主题开发 API
  *   - GET /api/server?id=<uuid>               当前服务器详情
@@ -69,7 +69,6 @@ function svgPairedBar(pct1, pct2, totalW, h, midGap, ratio) {
   return "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 " + totalW + " " + h + "'>" + rects + "</svg>";
 }
 
-// 恢复原本平整两端的 Uptime Bar 竖条样式
 function svgUptimeBar(colors, w, h) {
   const n = colors.length;
   const gap = 3;
@@ -187,21 +186,21 @@ function computeLatencyAndBlocks(history, isp, now, currentPing, currentLoss) {
   return { avgPing, avgLoss, delayBlocks, lossBlocks };
 }
 
-// ------------------------- 尺寸配置 -------------------------
+// ------------------------- 尺寸与对齐配置 -------------------------
 
 const SIZE_CONFIG = {
   systemSmall: {
-    width: 155, padding: 14, colGap: 5, tightGap: 3, outerGap: 9,
+    width: 155, padding: 12, colGap: 5, tightGap: 3, outerGap: 6,
     barH: 6, uptimeH: 10, barRatio: 1, trafficInset: 0, trafficH: 8,
-    showLabel: false, valueFont: 'footnote', labelFont: 'caption2',
+    showLabel: false, valueFont: 'caption1', labelFont: 'caption2',
   },
   systemMedium: {
-    width: 329, padding: 16, colGap: 5, tightGap: 3, outerGap: 7,
+    width: 329, padding: 16, colGap: 7, tightGap: 3, outerGap: 6,
     barH: 6, uptimeH: 14, barRatio: 1, trafficInset: 0, trafficH: 8,
     showLabel: true, valueFont: 'footnote', labelFont: 'caption1',
   },
   systemLarge: {
-    width: 329, padding: 18, colGap: 9, tightGap: 5, outerGap: 16,
+    width: 329, padding: 18, colGap: 9, tightGap: 5, outerGap: 12,
     barH: 8, uptimeH: 18, barRatio: 1, trafficInset: 0, trafficH: 10,
     showLabel: true, valueFont: 'headline', labelFont: 'footnote',
   },
@@ -217,7 +216,7 @@ function metricWithLabel(icon, label, color, valueText, cfg) {
   return {
     type: 'stack', direction: 'row', alignItems: 'center', flex: 1, gap: 4,
     children: [
-      { type: 'image', src: 'sf-symbol:' + icon, width: 11, height: 11, color: LABEL },
+      { type: 'image', src: 'sf-symbol:' + icon, width: 12, height: 12, color: LABEL },
       textMuted(label, cfg.labelFont),
       { type: 'spacer' },
       { type: 'text', text: valueText == null ? '-' : valueText, font: { size: cfg.valueFont, weight: 'bold' }, textColor: color },
@@ -229,7 +228,7 @@ function metricCompact(icon, color, valueText, cfg) {
   return {
     type: 'stack', direction: 'row', alignItems: 'center', flex: 1, gap: 4,
     children: [
-      { type: 'image', src: 'sf-symbol:' + icon, width: 11, height: 11, color: LABEL },
+      { type: 'image', src: 'sf-symbol:' + icon, width: 12, height: 12, color: LABEL },
       { type: 'text', text: valueText == null ? '-' : valueText, font: { size: cfg.valueFont, weight: 'bold' }, textColor: color },
     ],
   };
@@ -255,7 +254,7 @@ function delayLossColumns(ms, lossPct, delayBlocks, lossBlocks, colW, cfg) {
       {
         type: 'stack', direction: 'row', alignItems: 'center', gap: 4,
         children: [
-          { type: 'image', src: 'sf-symbol:' + icon, width: 11, height: 11, color: LABEL },
+          { type: 'image', src: 'sf-symbol:' + icon, width: 12, height: 12, color: LABEL },
           cfg.showLabel ? textMuted(label, cfg.labelFont) : null,
           { type: 'spacer' },
           { type: 'text', text: valueText, font: { size: cfg.valueFont, weight: 'bold' }, textColor: valueColor },
@@ -407,7 +406,7 @@ export default async function (ctx) {
   } else {
     const dBlocks = delayBlocks || new Array(20).fill(COLOR_OFFLINE);
     const lBlocks = lossBlocks || new Array(20).fill(COLOR_OFFLINE);
-    const colW = Math.floor((innerW - cfg.colGap) / 2);
+    const colW = (innerW - cfg.colGap) / 2;
     children.push(delayLossColumns(latestPing, avgLoss, dBlocks, lBlocks, colW, cfg));
   }
 
@@ -445,6 +444,9 @@ export default async function (ctx) {
       ],
     });
   }
+
+  // 底部插入 Spacer，将主体内容整体向上顶紧对齐
+  children.push({ type: 'spacer' });
 
   return {
     type: 'widget',
