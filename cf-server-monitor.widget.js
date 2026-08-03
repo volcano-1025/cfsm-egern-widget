@@ -266,8 +266,9 @@ function metricRow(cfg, items) {
 
 function barRow(pct1, pct2, barW, barH, gap, ratio) {
   const w = Math.max(10, Math.floor(barW * ratio));
+  const totalW = w * 2 + gap;
   return {
-    type: 'stack', direction: 'row', gap: gap,
+    type: 'stack', direction: 'row', gap: gap, width: totalW,
     children: [
       { type: 'image', src: svgBar(pct1, usageColor(pct1), w, barH), width: w, height: barH },
       { type: 'image', src: svgBar(pct2, usageColor(pct2), w, barH), width: w, height: barH },
