@@ -1,17 +1,16 @@
 /**
- * CF-Server-Monitor → Egern 小组件适配脚本 (Perfect Layout Edition)
- * ------------------------------------------------------------
- * 数据来源：CF-Server-Monitor 第三方主题开发 API
- *   - GET /api/server?id=<uuid>               当前服务器详情
- *   - GET /api/history/all?id=<uuid>&hours=1  近 1 小时历史
+ * CF-Server-Monitor → Egern 小组件适配脚本 (Strict Egern Official Doc Standard)
+ * --------------------------------------------------------------------------
+ * 符合文档：https://egernapp.com/zh-CN/docs/configuration/widgets/
+ *          https://egernapp.com/zh-CN/docs/javascript-api/
  */
 
-// ------------------------- 配色 -------------------------
+// ------------------------- 配色与样式 -------------------------
 
 const COLOR_STEPS = ['#32D74B', '#8ED957', '#FFD60A', '#FF9F0A', '#FF453A'];
 const COLOR_OFFLINE = '#48484A';
 const MUTED = { light: '#8E9CAE', dark: '#8E9CAE' };
-const LABEL = { light: '#FFFFFF', dark: '#FFFFFF' };
+const LABEL = '#FFFFFF';
 const ACCENT = '#32D74B';
 const TRACK_BG = 'rgba(255,255,255,0.16)';
 
@@ -42,7 +41,7 @@ function lossColor(pct) {
   return COLOR_STEPS[4];
 }
 
-// ------------------------- SVG 生成 -------------------------
+// ------------------------- SVG 绘图 (符合 Egern 内联 SVG 规范) -------------------------
 
 function svgBar(pct, color, w, h) {
   const p = Math.max(0, Math.min(100, pct || 0));
@@ -190,7 +189,7 @@ function computeLatencyAndBlocks(history, isp, now, currentPing, currentLoss) {
 
 const SIZE_CONFIG = {
   systemSmall: {
-    width: 155, padding: 14, colGap: 5, tightGap: 3, outerGap: 8,
+    width: 155, padding: 14, colGap: 5, tightGap: 3, outerGap: 11,
     barH: 6, uptimeH: 10, barRatio: 1, trafficInset: 0, trafficH: 8,
     showLabel: false, valueFont: 'caption1', labelFont: 'caption2',
   },
@@ -200,8 +199,8 @@ const SIZE_CONFIG = {
     showLabel: true, valueFont: 'footnote', labelFont: 'caption1',
   },
   systemLarge: {
-    width: 329, padding: 18, colGap: 9, tightGap: 5, outerGap: 16,
-    barH: 8, uptimeH: 18, barRatio: 1, trafficInset: 0, trafficH: 10,
+    width: 329, padding: 18, colGap: 9, tightGap: 6, outerGap: 26,
+    barH: 8, uptimeH: 20, barRatio: 1, trafficInset: 0, trafficH: 12,
     showLabel: true, valueFont: 'headline', labelFont: 'footnote',
   },
 };
@@ -307,7 +306,7 @@ function errorWidget(msg) {
   };
 }
 
-// ------------------------- 主逻辑 -------------------------
+// ------------------------- 主逻辑 (符合 Egern API 入口规范) -------------------------
 
 export default async function (ctx) {
   const BASE_URL = (ctx.env.BASE_URL || '').replace(/\/+$/, '');
@@ -371,7 +370,6 @@ export default async function (ctx) {
 
   const innerW = cfg.width - cfg.padding * 2;
 
-  // 平铺子节点，靠 Widget 原生 outerGap 自然撑开呼吸感
   const children = [
     headerRow(server.region, server.name, isOnline, lastUpdated),
     {
@@ -446,6 +444,7 @@ export default async function (ctx) {
     });
   }
 
+  // 返回符合 Egern DSL 规范的根 widget 描述对象
   return {
     type: 'widget',
     refreshAfter: new Date(now + 60 * 1000).toISOString(),
