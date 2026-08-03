@@ -212,15 +212,15 @@ function computeLatencyAndBlocks(history, isp, now, currentPing, currentLoss) {
 
 const SIZE_CONFIG = {
   systemSmall: {
-    width: 155, padding: 14, gap: 5, barH: 5, uptimeH: 10, barInset: 5,
+    width: 155, padding: 14, gap: 5, barH: 5, uptimeH: 10, barRatio: 0.72, trafficInset: 8,
     showLabel: false, valueFont: 'caption1', labelFont: 'caption2',
   },
   systemMedium: {
-    width: 329, padding: 16, gap: 5, barH: 5, uptimeH: 12, barInset: 6,
+    width: 329, padding: 16, gap: 5, barH: 5, uptimeH: 12, barRatio: 0.82, trafficInset: 10,
     showLabel: true, valueFont: 'caption1', labelFont: 'caption2',
   },
   systemLarge: {
-    width: 329, padding: 18, gap: 9, barH: 6, uptimeH: 16, barInset: 8,
+    width: 329, padding: 18, gap: 9, barH: 6, uptimeH: 16, barRatio: 0.82, trafficInset: 10,
     showLabel: true, valueFont: 'callout', labelFont: 'caption2',
   },
 };
@@ -264,8 +264,8 @@ function metricRow(cfg, items) {
   };
 }
 
-function barRow(pct1, pct2, barW, barH, gap, inset) {
-  const w = Math.max(10, barW - inset);
+function barRow(pct1, pct2, barW, barH, gap, ratio) {
+  const w = Math.max(10, Math.floor(barW * ratio));
   return {
     type: 'stack', direction: 'row', gap: gap,
     children: [
@@ -411,12 +411,12 @@ export default async function (ctx) {
       { icon: 'cpu', label: 'CPU', color: usageColor(cpuPct), valueText: cpuPct == null ? null : cpuPct.toFixed(2) + '%' },
       { icon: 'memorychip', label: '内存', color: usageColor(ramPct), valueText: ramPct == null ? null : ramPct.toFixed(2) + '%' },
     ]),
-    barRow(cpuPct, ramPct, barW, cfg.barH, cfg.gap, cfg.barInset),
+    barRow(cpuPct, ramPct, barW, cfg.barH, cfg.gap, cfg.barRatio),
     metricRow(cfg, [
       { icon: 'internaldrive', label: '磁盘', color: usageColor(diskPct), valueText: diskPct == null ? null : diskPct.toFixed(2) + '%' },
       { icon: 'gauge', label: '负载', color: usageColor(loadPct), valueText: load5 == null ? null : load5.toFixed(2) },
     ]),
-    barRow(diskPct, loadPct, barW, cfg.barH, cfg.gap, cfg.barInset),
+    barRow(diskPct, loadPct, barW, cfg.barH, cfg.gap, cfg.barRatio),
   ];
 
   if (family === 'systemSmall') {
@@ -447,8 +447,10 @@ export default async function (ctx) {
     }
     const remainBytes = limitBytes > 0 ? Math.max(0, limitBytes - usedBytes) : null;
     const usedPct = limitBytes > 0 ? clampPct((usedBytes / limitBytes) * 100) : null;
-    // "倒计"：填充长度按剩余量算，用得越多条越短；颜色仍按用量的危险程度着色
-    const remainPct = usedPct == null ? null : Math.max(0, 100 - usedPct);
+    // "倒计"：填充长度按剩余量算，用得越多条越短；颜色仍按用量的危险程度着色。
+    // 用量很小时（比如只用了 0.16%），99.8% 的填充几乎看不出缺口，
+    // 所以只要 usedBytes > 0 就强制留出一个至少可见的最小缺口，代表"已用"的部分。
+    let remainPct = usedPct == null ? null : Math.max(0, 100 - usedPct);
 
     children.push({ type: 'spacer' });
     children.push({
@@ -460,7 +462,12 @@ export default async function (ctx) {
         { type: 'text', text: limitBytes > 0 ? humanBytes(usedBytes) + ' / ' + humanBytes(limitBytes) : '-', font: { size: 'caption2' }, textColor: MUTED },
       ],
     });
-    const trafficBarW = Math.max(20, innerW - cfg.barInset * 2);
+    const trafficBarW = Math.max(20, innerW - cfg.trafficInset);
+    if (remainPct != null && usedBytes > 0) {
+      const MIN_GAP_PX = 5; // "已用"缺口至少保留这么宽，避免用量太小时完全看不见
+      const minGapPct = (MIN_GAP_PX / trafficBarW) * 100;
+      remainPct = Math.min(remainPct, 100 - minGapPct);
+    }
     children.push({ type: 'image', src: svgBar(remainPct, usageColor(usedPct), trafficBarW, cfg.barH), width: trafficBarW, height: cfg.barH });
   }
 
