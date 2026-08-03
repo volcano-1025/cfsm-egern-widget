@@ -23,10 +23,12 @@
  *   - last_updated 距当前超过 3 分钟视为离线
  *   - CPU / 内存 / 磁盘 使用率取 /api/server 返回的最新一次上报值（约 1 分钟粒度），保留 2 位小数
  *   - 负载显示 load_avg 的 5 分钟原始值（非百分比），进度条 / 配色仍按「原始值 / 核心数」换算的相对占比
- *   - 延迟 / 丢包率取 /api/history/all?hours=1 中对应运营商字段的均值；历史缺失该字段时回退为 /api/server 当前值；
- *     若选定线路完全无数据，自动尝试其余线路
- *   - Uptime Bar 每种指标各 20 格，每格约代表 3 分钟；格内无数据视为离线（灰色）
+ *   - 延迟展示「最新一次上报值」（不是近 1 小时均值）；丢包率仍取 /api/history/all?hours=1 的近 1 小时均值；
+ *     历史缺失该字段时回退为 /api/server 当前值；若选定线路完全无数据，自动尝试其余线路
+ *   - Uptime Bar 每种指标各 20 格，每格约代表 3 分钟，按历史分桶均值上色；格内无数据视为离线（灰色）
  *   - 剩余流量进度条为「倒计」样式：填充长度 = 剩余百分比（越用越短），颜色仍按用量的危险程度着色
+ *   - 所有进度条统一按 barInset 收窄一点，不贴边，且与上方文字左对齐
+ *   - 小组件右上角显示 last_updated 的本地时间（HH:mm）
  *
  * 配色分级（绿色 → 嫩绿色 → 黄绿色 → 黄色 → 红色）：
  *   usageColor()   用于 CPU/内存/磁盘/负载/流量 百分比进度条
@@ -210,15 +212,15 @@ function computeLatencyAndBlocks(history, isp, now, currentPing, currentLoss) {
 
 const SIZE_CONFIG = {
   systemSmall: {
-    width: 155, padding: 14, gap: 5, barH: 5, uptimeH: 10,
+    width: 155, padding: 14, gap: 5, barH: 5, uptimeH: 10, barInset: 5,
     showLabel: false, valueFont: 'caption1', labelFont: 'caption2',
   },
   systemMedium: {
-    width: 329, padding: 12, gap: 4, barH: 5, uptimeH: 12,
+    width: 329, padding: 16, gap: 5, barH: 5, uptimeH: 12, barInset: 6,
     showLabel: true, valueFont: 'caption1', labelFont: 'caption2',
   },
   systemLarge: {
-    width: 329, padding: 18, gap: 9, barH: 6, uptimeH: 16,
+    width: 329, padding: 18, gap: 9, barH: 6, uptimeH: 16, barInset: 8,
     showLabel: true, valueFont: 'callout', labelFont: 'caption2',
   },
 };
@@ -262,12 +264,13 @@ function metricRow(cfg, items) {
   };
 }
 
-function barRow(pct1, pct2, barW, barH, gap) {
+function barRow(pct1, pct2, barW, barH, gap, inset) {
+  const w = Math.max(10, barW - inset);
   return {
     type: 'stack', direction: 'row', gap: gap,
     children: [
-      { type: 'image', src: svgBar(pct1, usageColor(pct1), barW, barH), width: barW, height: barH },
-      { type: 'image', src: svgBar(pct2, usageColor(pct2), barW, barH), width: barW, height: barH },
+      { type: 'image', src: svgBar(pct1, usageColor(pct1), w, barH), width: w, height: barH },
+      { type: 'image', src: svgBar(pct2, usageColor(pct2), w, barH), width: w, height: barH },
     ],
   };
 }
@@ -299,13 +302,22 @@ function delayLossColumns(ms, lossPct, delayBlocks, lossBlocks, colW, cfg) {
   };
 }
 
-function headerRow(region, name, isOnline) {
+function formatTime(ts) {
+  if (!ts) return '--:--';
+  const d = new Date(ts);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return hh + ':' + mm;
+}
+
+function headerRow(region, name, isOnline, lastUpdated) {
   return {
     type: 'stack', direction: 'row', alignItems: 'center', gap: 6,
     children: [
       { type: 'image', src: 'sf-symbol:circle.fill', width: 7, height: 7, color: isOnline ? '#2ECC71' : '#E74C3C' },
       { type: 'text', text: region || '-', font: { size: 'caption1', weight: 'semibold' }, textColor: MUTED },
       { type: 'text', text: name || '-', font: { size: 'footnote', weight: 'bold' }, textColor: { light: '#111111', dark: '#FFFFFF' }, flex: 1, maxLines: 1, minScale: 0.7 },
+      { type: 'text', text: formatTime(lastUpdated), font: { size: 'caption2' }, textColor: MUTED },
     ],
   };
 }
@@ -366,7 +378,6 @@ export default async function (ctx) {
   const currentPing = toNum(server['ping_' + ISP]);
   const currentLoss = toNum(server['loss_' + ISP]);
 
-  let avgPing = currentPing;
   let avgLoss = currentLoss;
   let delayBlocks = null;
   let lossBlocks = null;
@@ -375,17 +386,19 @@ export default async function (ctx) {
     const hist = await fetchJSON(ctx, BASE_URL + '/api/history/all?id=' + encodeURIComponent(SERVER_ID) + '&hours=1');
     if (Array.isArray(hist) && hist.length) {
       const computed = computeLatencyAndBlocks(hist, ISP, now, currentPing, currentLoss);
-      avgPing = computed.avgPing;
       avgLoss = computed.avgLoss;
       delayBlocks = computed.delayBlocks;
       lossBlocks = computed.lossBlocks;
     }
   } catch (e) {
-    // 历史数据获取失败，回退为当前值，Uptime Bar 置空（显示离线灰色）
+    // 历史数据获取失败，Uptime Bar 置空（显示离线灰色），丢包率回退为当前值
   }
 
+  // 延迟展示用最新一次上报值（不取近 1 小时均值），Uptime Bar 仍按历史分桶展示趋势
+  let latestPing = currentPing;
+
   if (!isOnline) {
-    avgPing = null;
+    latestPing = null;
     avgLoss = null;
   }
 
@@ -393,24 +406,24 @@ export default async function (ctx) {
   const barW = Math.floor((innerW - cfg.gap) / 2);
 
   const children = [
-    headerRow(server.region, server.name, isOnline),
+    headerRow(server.region, server.name, isOnline, lastUpdated),
     metricRow(cfg, [
       { icon: 'cpu', label: 'CPU', color: usageColor(cpuPct), valueText: cpuPct == null ? null : cpuPct.toFixed(2) + '%' },
       { icon: 'memorychip', label: '内存', color: usageColor(ramPct), valueText: ramPct == null ? null : ramPct.toFixed(2) + '%' },
     ]),
-    barRow(cpuPct, ramPct, barW, cfg.barH, cfg.gap),
+    barRow(cpuPct, ramPct, barW, cfg.barH, cfg.gap, cfg.barInset),
     metricRow(cfg, [
       { icon: 'internaldrive', label: '磁盘', color: usageColor(diskPct), valueText: diskPct == null ? null : diskPct.toFixed(2) + '%' },
-      { icon: 'chart.bar.fill', label: '负载', color: usageColor(loadPct), valueText: load5 == null ? null : load5.toFixed(2) },
+      { icon: 'gauge', label: '负载', color: usageColor(loadPct), valueText: load5 == null ? null : load5.toFixed(2) },
     ]),
-    barRow(diskPct, loadPct, barW, cfg.barH, cfg.gap),
+    barRow(diskPct, loadPct, barW, cfg.barH, cfg.gap, cfg.barInset),
   ];
 
   if (family === 'systemSmall') {
     children.push({
       type: 'stack', direction: 'row', gap: cfg.gap,
       children: [
-        metricCompact('clock', latencyColor(avgPing), avgPing == null ? null : Math.round(avgPing) + 'ms', cfg),
+        metricCompact('clock', latencyColor(latestPing), latestPing == null ? null : Math.round(latestPing) + 'ms', cfg),
         metricCompact('wifi.exclamationmark', lossColor(avgLoss), avgLoss == null ? null : avgLoss.toFixed(1) + '%', cfg),
       ],
     });
@@ -420,7 +433,7 @@ export default async function (ctx) {
     const colW = Math.floor((innerW - cfg.gap) / 2);
 
     if (family === 'systemLarge') children.push({ type: 'spacer' });
-    children.push(delayLossColumns(avgPing, avgLoss, dBlocks, lBlocks, colW, cfg));
+    children.push(delayLossColumns(latestPing, avgLoss, dBlocks, lBlocks, colW, cfg));
   }
 
   if (family === 'systemLarge') {
@@ -447,7 +460,8 @@ export default async function (ctx) {
         { type: 'text', text: limitBytes > 0 ? humanBytes(usedBytes) + ' / ' + humanBytes(limitBytes) : '-', font: { size: 'caption2' }, textColor: MUTED },
       ],
     });
-    children.push({ type: 'image', src: svgBar(remainPct, usageColor(usedPct), innerW, cfg.barH), width: innerW, height: cfg.barH });
+    const trafficBarW = Math.max(20, innerW - cfg.barInset * 2);
+    children.push({ type: 'image', src: svgBar(remainPct, usageColor(usedPct), trafficBarW, cfg.barH), width: trafficBarW, height: cfg.barH });
   }
 
   return {
