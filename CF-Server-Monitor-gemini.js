@@ -1,5 +1,5 @@
 /**
- * CF-Server-Monitor → Egern 小组件适配脚本 (Visual & Layout Perfect Edition)
+ * CF-Server-Monitor → Egern 小组件适配脚本 (Perfect Layout Edition)
  * ------------------------------------------------------------
  * 数据来源：CF-Server-Monitor 第三方主题开发 API
  *   - GET /api/server?id=<uuid>               当前服务器详情
@@ -190,9 +190,9 @@ function computeLatencyAndBlocks(history, isp, now, currentPing, currentLoss) {
 
 const SIZE_CONFIG = {
   systemSmall: {
-    width: 155, padding: 14, colGap: 5, tightGap: 3, outerGap: 9,
+    width: 155, padding: 14, colGap: 5, tightGap: 3, outerGap: 8,
     barH: 6, uptimeH: 10, barRatio: 1, trafficInset: 0, trafficH: 8,
-    showLabel: false, valueFont: 'footnote', labelFont: 'caption2',
+    showLabel: false, valueFont: 'caption1', labelFont: 'caption2',
   },
   systemMedium: {
     width: 329, padding: 16, colGap: 7, tightGap: 3, outerGap: 8,
@@ -371,55 +371,47 @@ export default async function (ctx) {
 
   const innerW = cfg.width - cfg.padding * 2;
 
-  // 性能区块：包含 CPU/内存 及 磁盘/负载
-  const performanceSection = {
-    type: 'stack', direction: 'column', gap: cfg.outerGap,
-    children: [
-      {
-        type: 'stack', direction: 'column', gap: cfg.tightGap,
-        children: [
-          metricRow(cfg, [
-            { icon: 'cpu', label: 'CPU', color: usageColor(cpuPct), valueText: cpuPct == null ? null : cpuPct.toFixed(2) + '%' },
-            { icon: 'memorychip', label: '内存', color: usageColor(ramPct), valueText: ramPct == null ? null : ramPct.toFixed(2) + '%' },
-          ]),
-          barRow(cpuPct, ramPct, innerW, cfg.barH, cfg.colGap, cfg.barRatio),
-        ],
-      },
-      {
-        type: 'stack', direction: 'column', gap: cfg.tightGap,
-        children: [
-          metricRow(cfg, [
-            { icon: 'internaldrive', label: '磁盘', color: usageColor(diskPct), valueText: diskPct == null ? null : diskPct.toFixed(2) + '%' },
-            { icon: 'gauge', label: '负载', color: usageColor(loadPct), valueText: load5 == null ? null : load5.toFixed(2) },
-          ]),
-          barRow(diskPct, loadPct, innerW, cfg.barH, cfg.colGap, cfg.barRatio),
-        ],
-      },
-    ],
-  };
+  // 平铺子节点，靠 Widget 原生 outerGap 自然撑开呼吸感
+  const children = [
+    headerRow(server.region, server.name, isOnline, lastUpdated),
+    {
+      type: 'stack', direction: 'column', gap: cfg.tightGap,
+      children: [
+        metricRow(cfg, [
+          { icon: 'cpu', label: 'CPU', color: usageColor(cpuPct), valueText: cpuPct == null ? null : cpuPct.toFixed(2) + '%' },
+          { icon: 'memorychip', label: '内存', color: usageColor(ramPct), valueText: ramPct == null ? null : ramPct.toFixed(2) + '%' },
+        ]),
+        barRow(cpuPct, ramPct, innerW, cfg.barH, cfg.colGap, cfg.barRatio),
+      ],
+    },
+    {
+      type: 'stack', direction: 'column', gap: cfg.tightGap,
+      children: [
+        metricRow(cfg, [
+          { icon: 'internaldrive', label: '磁盘', color: usageColor(diskPct), valueText: diskPct == null ? null : diskPct.toFixed(2) + '%' },
+          { icon: 'gauge', label: '负载', color: usageColor(loadPct), valueText: load5 == null ? null : load5.toFixed(2) },
+        ]),
+        barRow(diskPct, loadPct, innerW, cfg.barH, cfg.colGap, cfg.barRatio),
+      ],
+    },
+  ];
 
-  // 网络区块：包含 延迟/丢包率
-  let networkSection;
   if (family === 'systemSmall') {
-    networkSection = {
+    children.push({
       type: 'stack', direction: 'row', gap: cfg.colGap,
       children: [
         metricCompact('clock', latencyColor(latestPing), latestPing == null ? null : Math.round(latestPing) + 'ms', cfg),
         metricCompact('wifi.exclamationmark', lossColor(avgLoss), avgLoss == null ? null : avgLoss.toFixed(1) + '%', cfg),
       ],
-    };
+    });
   } else {
     const dBlocks = delayBlocks || new Array(20).fill(COLOR_OFFLINE);
     const lBlocks = lossBlocks || new Array(20).fill(COLOR_OFFLINE);
     const colW = (innerW - cfg.colGap) / 2;
-    networkSection = delayLossColumns(latestPing, avgLoss, dBlocks, lBlocks, colW, cfg);
+    children.push(delayLossColumns(latestPing, avgLoss, dBlocks, lBlocks, colW, cfg));
   }
 
-  // 根据尺寸构造最佳垂直排版与间距策略
-  let children = [];
-
   if (family === 'systemLarge') {
-    // 流量区块
     const limitBytes = parseSizeToBytes(server.traffic_limit);
     let usedBytes = 0;
     switch (server.traffic_calc_type) {
@@ -437,7 +429,7 @@ export default async function (ctx) {
       remainPct = Math.min(remainPct, 100 - minGapPct);
     }
 
-    const trafficSection = {
+    children.push({
       type: 'stack', direction: 'column', gap: cfg.tightGap,
       children: [
         {
@@ -451,26 +443,7 @@ export default async function (ctx) {
         },
         { type: 'image', src: svgBar(remainPct, usageColor(usedPct), trafficBarW, cfg.trafficH), width: trafficBarW, height: cfg.trafficH },
       ],
-    };
-
-    // 大尺寸：用弹性空白 (spacer) 均匀扩展分布四大区块，彻底解决缩在顶端的问题
-    children = [
-      headerRow(server.region, server.name, isOnline, lastUpdated),
-      { type: 'spacer' },
-      performanceSection,
-      { type: 'spacer' },
-      networkSection,
-      { type: 'spacer' },
-      trafficSection,
-      { type: 'spacer' },
-    ];
-  } else {
-    // 中/小尺寸：靠合理的 padding 和 outerGap 垂直铺满，不加尾部 spacer
-    children = [
-      headerRow(server.region, server.name, isOnline, lastUpdated),
-      performanceSection,
-      networkSection,
-    ];
+    });
   }
 
   return {
