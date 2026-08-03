@@ -1,17 +1,19 @@
 /**
- * CF-Server-Monitor → Egern 小组件适配脚本 (Visual Refresh)
+ * CF-Server-Monitor → Egern 小组件适配脚本 (Visual Refresh v2)
  * ------------------------------------------------------------
- * 保持原有逻辑与布局，重构为更高颜值的 iOS 风格 UI
+ * 数据来源：CF-Server-Monitor 第三方主题开发 API
+ *   - GET /api/server?id=<uuid>               当前服务器详情
+ *   - GET /api/history/all?id=<uuid>&hours=1  近 1 小时历史
  */
 
-// ------------------------- 高级配色 (iOS Vibrant Style) -------------------------
+// ------------------------- 配色 -------------------------
 
-const COLOR_STEPS = ['#32D74B', '#A7E45C', '#FFD60A', '#FF9F0A', '#FF453A']; 
+const COLOR_STEPS = ['#32D74B', '#8ED957', '#FFD60A', '#FF9F0A', '#FF453A'];
 const COLOR_OFFLINE = '#48484A';
-const MUTED = { light: '#8E8E93', dark: '#8E9CAE' };
+const MUTED = { light: '#8E9CAE', dark: '#8E9CAE' };
 const LABEL = { light: '#FFFFFF', dark: '#FFFFFF' };
 const ACCENT = '#32D74B';
-const TRACK_BG = 'rgba(255,255,255,0.12)'; // 进度条底纹
+const TRACK_BG = 'rgba(255,255,255,0.16)';
 
 function usageColor(pct) {
   if (pct == null || isNaN(pct)) return COLOR_OFFLINE;
@@ -40,11 +42,11 @@ function lossColor(pct) {
   return COLOR_STEPS[4];
 }
 
-// ------------------------- SVG 重绘 (圆角优化) -------------------------
+// ------------------------- SVG 生成 -------------------------
 
 function svgBar(pct, color, w, h) {
   const p = Math.max(0, Math.min(100, pct || 0));
-  const r = h / 2; // 完美胶囊形状
+  const r = h / 2;
   const fillW = Math.max(h, w * p / 100).toFixed(1);
   return "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 " + w + " " + h + "'>" +
     "<rect x='0' y='0' width='" + w + "' height='" + h + "' rx='" + r + "' fill='" + TRACK_BG + "'/>" +
@@ -67,11 +69,12 @@ function svgPairedBar(pct1, pct2, totalW, h, midGap, ratio) {
   return "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 " + totalW + " " + h + "'>" + rects + "</svg>";
 }
 
+// 恢复原本平整两端的 Uptime Bar 竖条样式
 function svgUptimeBar(colors, w, h) {
   const n = colors.length;
   const gap = 3;
   const blockW = (w - gap * (n - 1)) / n;
-  const rx = (h / 2.5).toFixed(1); // 目标图中的块状圆角
+  const rx = Math.min(2.5, blockW / 2).toFixed(1);
   let rects = '';
   for (let i = 0; i < n; i++) {
     const x = (i * (blockW + gap)).toFixed(1);
@@ -79,26 +82,6 @@ function svgUptimeBar(colors, w, h) {
   }
   return "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 " + w + " " + h + "'>" + rects + "</svg>";
 }
-
-// ------------------------- 尺寸配置 (微调高度以匹配目标图) -------------------------
-
-const SIZE_CONFIG = {
-  systemSmall: {
-    width: 155, padding: 14, colGap: 6, tightGap: 4, outerGap: 10,
-    barH: 6, uptimeH: 12, barRatio: 1, trafficInset: 0, trafficH: 8,
-    showLabel: false, valueFont: 'footnote', labelFont: 'caption2',
-  },
-  systemMedium: {
-    width: 329, padding: 16, colGap: 10, tightGap: 5, outerGap: 12,
-    barH: 7, uptimeH: 16, barRatio: 1, trafficInset: 0, trafficH: 10,
-    showLabel: true, valueFont: 'footnote', labelFont: 'caption1',
-  },
-  systemLarge: {
-    width: 329, padding: 20, colGap: 12, tightGap: 8, outerGap: 22,
-    barH: 10, uptimeH: 22, barRatio: 1, trafficInset: 0, trafficH: 12,
-    showLabel: true, valueFont: 'headline', labelFont: 'footnote',
-  },
-};
 
 // ------------------------- 工具函数 -------------------------
 
@@ -160,10 +143,13 @@ function computeLatencyAndBlocks(history, isp, now, currentPing, currentLoss) {
   const spanMs = 60 * 60 * 1000;
   const bucketMs = spanMs / BLOCKS;
   const startTs = now - spanMs;
+
   const buckets = [];
   for (let i = 0; i < BLOCKS; i++) buckets.push({ ping: [], loss: [] });
+
   const allPing = [];
   const allLoss = [];
+
   for (const row of history) {
     const ts = Number(row.timestamp);
     if (!ts) continue;
@@ -178,35 +164,60 @@ function computeLatencyAndBlocks(history, isp, now, currentPing, currentLoss) {
     if (ping != null) buckets[idx].ping.push(ping);
     if (loss != null) buckets[idx].loss.push(loss);
   }
+
   const avg = (arr) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null);
   const avgPing = allPing.length ? avg(allPing) : currentPing;
   const avgLoss = allLoss.length ? avg(allLoss) : currentLoss;
+
   const hasHistoryPing = allPing.length > 0;
   const hasHistoryLoss = allLoss.length > 0;
+
   const delayBlocks = buckets.map((b, i) => {
     if (!hasHistoryPing) return i === BLOCKS - 1 ? latencyColor(currentPing) : COLOR_OFFLINE;
     if (!b.ping.length) return COLOR_OFFLINE;
     return latencyColor(avg(b.ping));
   });
+
   const lossBlocks = buckets.map((b, i) => {
     if (!hasHistoryLoss) return i === BLOCKS - 1 ? lossColor(currentLoss) : COLOR_OFFLINE;
     if (!b.loss.length) return COLOR_OFFLINE;
     return lossColor(avg(b.loss));
   });
+
   return { avgPing, avgLoss, delayBlocks, lossBlocks };
 }
+
+// ------------------------- 尺寸配置 -------------------------
+
+const SIZE_CONFIG = {
+  systemSmall: {
+    width: 155, padding: 14, colGap: 5, tightGap: 3, outerGap: 9,
+    barH: 6, uptimeH: 10, barRatio: 1, trafficInset: 0, trafficH: 8,
+    showLabel: false, valueFont: 'footnote', labelFont: 'caption2',
+  },
+  systemMedium: {
+    width: 329, padding: 16, colGap: 5, tightGap: 3, outerGap: 7,
+    barH: 6, uptimeH: 14, barRatio: 1, trafficInset: 0, trafficH: 8,
+    showLabel: true, valueFont: 'footnote', labelFont: 'caption1',
+  },
+  systemLarge: {
+    width: 329, padding: 18, colGap: 9, tightGap: 5, outerGap: 16,
+    barH: 8, uptimeH: 18, barRatio: 1, trafficInset: 0, trafficH: 10,
+    showLabel: true, valueFont: 'headline', labelFont: 'footnote',
+  },
+};
 
 // ------------------------- DSL 组件 -------------------------
 
 function textMuted(text, size) {
-  return { type: 'text', text: text, font: { size: size || 'caption2' }, textColor: MUTED };
+  return { type: 'text', text: text, font: { size: size || 'caption2' }, textColor: LABEL };
 }
 
 function metricWithLabel(icon, label, color, valueText, cfg) {
   return {
     type: 'stack', direction: 'row', alignItems: 'center', flex: 1, gap: 4,
     children: [
-      { type: 'image', src: 'sf-symbol:' + icon, width: 11, height: 11, color: MUTED },
+      { type: 'image', src: 'sf-symbol:' + icon, width: 11, height: 11, color: LABEL },
       textMuted(label, cfg.labelFont),
       { type: 'spacer' },
       { type: 'text', text: valueText == null ? '-' : valueText, font: { size: cfg.valueFont, weight: 'bold' }, textColor: color },
@@ -218,7 +229,7 @@ function metricCompact(icon, color, valueText, cfg) {
   return {
     type: 'stack', direction: 'row', alignItems: 'center', flex: 1, gap: 4,
     children: [
-      { type: 'image', src: 'sf-symbol:' + icon, width: 11, height: 11, color: MUTED },
+      { type: 'image', src: 'sf-symbol:' + icon, width: 11, height: 11, color: LABEL },
       { type: 'text', text: valueText == null ? '-' : valueText, font: { size: cfg.valueFont, weight: 'bold' }, textColor: color },
     ],
   };
@@ -239,12 +250,12 @@ function barRow(pct1, pct2, totalW, barH, gap, ratio) {
 
 function delayLossColumns(ms, lossPct, delayBlocks, lossBlocks, colW, cfg) {
   const column = (icon, label, valueText, valueColor, blocks) => ({
-    type: 'stack', direction: 'column', flex: 1, gap: 5,
+    type: 'stack', direction: 'column', flex: 1, gap: 4,
     children: [
       {
         type: 'stack', direction: 'row', alignItems: 'center', gap: 4,
         children: [
-          { type: 'image', src: 'sf-symbol:' + icon, width: 11, height: 11, color: MUTED },
+          { type: 'image', src: 'sf-symbol:' + icon, width: 11, height: 11, color: LABEL },
           cfg.showLabel ? textMuted(label, cfg.labelFont) : null,
           { type: 'spacer' },
           { type: 'text', text: valueText, font: { size: cfg.valueFont, weight: 'bold' }, textColor: valueColor },
@@ -253,6 +264,7 @@ function delayLossColumns(ms, lossPct, delayBlocks, lossBlocks, colW, cfg) {
       { type: 'image', src: svgUptimeBar(blocks, colW, cfg.uptimeH), width: colW, height: cfg.uptimeH },
     ],
   });
+
   return {
     type: 'stack', direction: 'row', gap: cfg.colGap,
     children: [
@@ -274,8 +286,8 @@ function headerRow(region, name, isOnline, lastUpdated) {
   return {
     type: 'stack', direction: 'row', alignItems: 'center', gap: 6,
     children: [
-      { type: 'image', src: 'sf-symbol:circle.fill', width: 10, height: 10, color: isOnline ? ACCENT : '#FF453A' },
-      { type: 'text', text: region || '-', font: { size: 'footnote', weight: 'bold' }, textColor: LABEL },
+      { type: 'image', src: 'sf-symbol:circle.fill', width: 8, height: 8, color: isOnline ? ACCENT : '#FF453A' },
+      { type: 'text', text: region || '-', font: { size: 'footnote', weight: 'semibold' }, textColor: LABEL },
       { type: 'text', text: name || '-', font: { size: 'footnote', weight: 'bold' }, textColor: ACCENT, flex: 1, maxLines: 1, minScale: 0.7 },
       { type: 'text', text: formatTime(lastUpdated), font: { size: 'caption1' }, textColor: MUTED },
     ],
@@ -305,13 +317,17 @@ export default async function (ctx) {
   const family = ctx.widgetFamily;
   const cfg = SIZE_CONFIG[family] || SIZE_CONFIG.systemSmall;
 
-  if (!BASE_URL || !SERVER_ID) return errorWidget('配置缺失');
+  if (!BASE_URL || !SERVER_ID) {
+    return errorWidget('请在小组件 env 中配置 BASE_URL 和 SERVER_ID');
+  }
 
   let server;
   try {
     server = await fetchJSON(ctx, BASE_URL + '/api/server?id=' + encodeURIComponent(SERVER_ID));
-    if (!server || server.error) throw new Error();
-  } catch (e) { return errorWidget('数据加载失败'); }
+    if (!server || server.error) throw new Error((server && server.error) || 'empty response');
+  } catch (e) {
+    return errorWidget('数据加载失败');
+  }
 
   const now = Date.now();
   const lastUpdated = Number(server.last_updated || server.timestamp || 0);
@@ -334,27 +350,36 @@ export default async function (ctx) {
   const currentPing = toNum(server['ping_' + ISP]);
   const currentLoss = toNum(server['loss_' + ISP]);
 
-  let avgLoss = currentLoss, delayBlocks = null, lossBlocks = null;
+  let avgLoss = currentLoss;
+  let delayBlocks = null;
+  let lossBlocks = null;
+
   try {
     const hist = await fetchJSON(ctx, BASE_URL + '/api/history/all?id=' + encodeURIComponent(SERVER_ID) + '&hours=1');
     if (Array.isArray(hist) && hist.length) {
       const computed = computeLatencyAndBlocks(hist, ISP, now, currentPing, currentLoss);
-      avgLoss = computed.avgLoss; delayBlocks = computed.delayBlocks; lossBlocks = computed.lossBlocks;
+      avgLoss = computed.avgLoss;
+      delayBlocks = computed.delayBlocks;
+      lossBlocks = computed.lossBlocks;
     }
   } catch (e) {}
 
   let latestPing = currentPing;
-  if (!isOnline) { latestPing = null; avgLoss = null; }
+  if (!isOnline) {
+    latestPing = null;
+    avgLoss = null;
+  }
 
   const innerW = cfg.width - cfg.padding * 2;
+
   const children = [
     headerRow(server.region, server.name, isOnline, lastUpdated),
     {
       type: 'stack', direction: 'column', gap: cfg.tightGap,
       children: [
         metricRow(cfg, [
-          { icon: 'cpu', label: 'CPU', color: usageColor(cpuPct), valueText: cpuPct == null ? null : cpuPct.toFixed(1) + '%' },
-          { icon: 'memorychip', label: '内存', color: usageColor(ramPct), valueText: ramPct == null ? null : ramPct.toFixed(1) + '%' },
+          { icon: 'cpu', label: 'CPU', color: usageColor(cpuPct), valueText: cpuPct == null ? null : cpuPct.toFixed(2) + '%' },
+          { icon: 'memorychip', label: '内存', color: usageColor(ramPct), valueText: ramPct == null ? null : ramPct.toFixed(2) + '%' },
         ]),
         barRow(cpuPct, ramPct, innerW, cfg.barH, cfg.colGap, cfg.barRatio),
       ],
@@ -363,7 +388,7 @@ export default async function (ctx) {
       type: 'stack', direction: 'column', gap: cfg.tightGap,
       children: [
         metricRow(cfg, [
-          { icon: 'internaldrive', label: '磁盘', color: usageColor(diskPct), valueText: diskPct == null ? null : diskPct.toFixed(1) + '%' },
+          { icon: 'internaldrive', label: '磁盘', color: usageColor(diskPct), valueText: diskPct == null ? null : diskPct.toFixed(2) + '%' },
           { icon: 'gauge', label: '负载', color: usageColor(loadPct), valueText: load5 == null ? null : load5.toFixed(2) },
         ]),
         barRow(diskPct, loadPct, innerW, cfg.barH, cfg.colGap, cfg.barRatio),
@@ -398,11 +423,12 @@ export default async function (ctx) {
     const remainBytes = limitBytes > 0 ? Math.max(0, limitBytes - usedBytes) : null;
     const usedPct = limitBytes > 0 ? clampPct((usedBytes / limitBytes) * 100) : null;
     let remainPct = usedPct == null ? null : Math.max(0, 100 - usedPct);
-    const trafficBarW = innerW - cfg.trafficInset;
+    const trafficBarW = Math.max(20, innerW - cfg.trafficInset);
     if (remainPct != null && usedBytes > 0) {
       const minGapPct = (5 / trafficBarW) * 100;
       remainPct = Math.min(remainPct, 100 - minGapPct);
     }
+
     children.push({
       type: 'stack', direction: 'column', gap: cfg.tightGap,
       children: [
@@ -427,7 +453,7 @@ export default async function (ctx) {
     gap: cfg.outerGap,
     backgroundGradient: {
       type: 'linear',
-      colors: isOnline ? ['#0A1C32', '#06101D'] : ['#1C1C1E', '#111112'],
+      colors: isOnline ? ['#0B2340', '#061527'] : ['#1C1C1E', '#111112'],
       startPoint: { x: 0, y: 0 },
       endPoint: { x: 0, y: 1 },
     },
