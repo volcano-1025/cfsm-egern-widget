@@ -40,7 +40,9 @@
 
 const COLOR_STEPS = ['#2ECC71', '#7ED957', '#C9D93B', '#F1C40F', '#E74C3C'];
 const COLOR_OFFLINE = '#8E8E93';
-const MUTED = { light: '#6B6B6F', dark: '#9A9A9E' };
+const MUTED = { light: 'rgba(0,0,0,0.5)', dark: 'rgba(255,255,255,0.55)' };
+const ICON_MUTED = { light: 'rgba(0,0,0,0.32)', dark: 'rgba(255,255,255,0.32)' };
+const PRIMARY_TEXT = { light: '#111111', dark: '#FFFFFF' };
 
 function usageColor(pct) {
   if (pct == null || isNaN(pct)) return COLOR_OFFLINE;
@@ -76,7 +78,7 @@ function svgBar(pct, color, w, h) {
   const r = h / 2;
   const fillW = (w * p / 100).toFixed(1);
   return "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 " + w + " " + h + "'>" +
-    "<rect x='0' y='0' width='" + w + "' height='" + h + "' rx='" + r + "' fill='rgba(150,150,150,0.28)'/>" +
+    "<rect x='0' y='0' width='" + w + "' height='" + h + "' rx='" + r + "' fill='rgba(255,255,255,0.15)'/>" +
     "<rect x='0' y='0' width='" + fillW + "' height='" + h + "' rx='" + r + "' fill='" + color + "'/>" +
     "</svg>";
 }
@@ -95,7 +97,7 @@ function svgPairedBar(pct1, pct2, totalW, h, midGap, ratio) {
     const p = Math.max(0, Math.min(100, pct || 0));
     const fillW = (barLen * p / 100).toFixed(1);
     const color = usageColor(pct);
-    return "<rect x='" + x0.toFixed(1) + "' y='0' width='" + barLen.toFixed(1) + "' height='" + h + "' rx='" + r + "' fill='rgba(150,150,150,0.28)'/>" +
+    return "<rect x='" + x0.toFixed(1) + "' y='0' width='" + barLen.toFixed(1) + "' height='" + h + "' rx='" + r + "' fill='rgba(255,255,255,0.15)'/>" +
       "<rect x='" + x0.toFixed(1) + "' y='0' width='" + fillW + "' height='" + h + "' rx='" + r + "' fill='" + color + "'/>";
   };
   const rects = seg(0, pct1) + seg(halfW + midGap, pct2);
@@ -230,29 +232,35 @@ function computeLatencyAndBlocks(history, isp, now, currentPing, currentLoss) {
 // ------------------------- 尺寸配置 -------------------------
 // small / medium 的物理高度都只有 ~155pt，large 有 ~345pt，因此三档的内边距、
 // 行间距、进度条粗细分开配置，而不是简单地按宽度一刀切。
+// 间距统一用 4 / 8 / 12 / 16 / 24 这套 8pt 节奏，不再用随意数值。
+// 字号也不是直接套 caption1/caption2，而是按「数值 > 标题 > 标签/时间」建了一套
+// 独立的数值刻度，让数值明显是视觉重心，图标和标签退到背景。
 
 const SIZE_CONFIG = {
   systemSmall: {
-    width: 155, padding: 14, colGap: 5, tightGap: 3, outerGap: 9,
-    barH: 5, uptimeH: 10, barRatio: 1, trafficInset: 0,
-    showLabel: false, valueFont: 'caption1', labelFont: 'caption2',
+    width: 155, padding: 12, colGap: 8, tightGap: 4, outerGap: 8,
+    barH: 4, uptimeH: 8, barRatio: 1, trafficInset: 0, iconSize: 10, dotSize: 6,
+    showLabel: false, valueFont: 15, labelFont: 10,
+    headerNameFont: 15, headerRegionFont: 11, headerTimeFont: 10,
   },
   systemMedium: {
-    width: 329, padding: 16, colGap: 5, tightGap: 3, outerGap: 7,
-    barH: 5, uptimeH: 12, barRatio: 1, trafficInset: 0,
-    showLabel: true, valueFont: 'caption1', labelFont: 'caption2',
+    width: 329, padding: 8, colGap: 8, tightGap: 4, outerGap: 8,
+    barH: 4, uptimeH: 8, barRatio: 1, trafficInset: 0, iconSize: 10, dotSize: 6,
+    showLabel: true, valueFont: 15, labelFont: 11,
+    headerNameFont: 16, headerRegionFont: 11, headerTimeFont: 10,
   },
   systemLarge: {
-    width: 329, padding: 18, colGap: 9, tightGap: 5, outerGap: 16,
-    barH: 6, uptimeH: 16, barRatio: 1, trafficInset: 0,
-    showLabel: true, valueFont: 'callout', labelFont: 'caption2',
+    width: 329, padding: 16, colGap: 12, tightGap: 8, outerGap: 16,
+    barH: 5, uptimeH: 14, barRatio: 1, trafficInset: 0, iconSize: 11, dotSize: 7,
+    showLabel: true, valueFont: 18, labelFont: 12,
+    headerNameFont: 18, headerRegionFont: 13, headerTimeFont: 11,
   },
 };
 
 // ------------------------- DSL 组件 -------------------------
 
 function textMuted(text, size) {
-  return { type: 'text', text: text, font: { size: size || 'caption2' }, textColor: MUTED };
+  return { type: 'text', text: text, font: { size: size || 11 }, textColor: MUTED };
 }
 
 // 有文字标签版本（medium / large）：图标 + 标签 + 弹簧 + 数值
@@ -260,7 +268,7 @@ function metricWithLabel(icon, label, color, valueText, cfg) {
   return {
     type: 'stack', direction: 'row', alignItems: 'center', flex: 1, gap: 4,
     children: [
-      { type: 'image', src: 'sf-symbol:' + icon, width: 11, height: 11, color: MUTED },
+      { type: 'image', src: 'sf-symbol:' + icon, width: cfg.iconSize, height: cfg.iconSize, color: ICON_MUTED },
       textMuted(label, cfg.labelFont),
       { type: 'spacer' },
       { type: 'text', text: valueText == null ? '-' : valueText, font: { size: cfg.valueFont, weight: 'bold' }, textColor: color },
@@ -273,7 +281,7 @@ function metricCompact(icon, color, valueText, cfg) {
   return {
     type: 'stack', direction: 'row', alignItems: 'center', flex: 1, gap: 4,
     children: [
-      { type: 'image', src: 'sf-symbol:' + icon, width: 11, height: 11, color: MUTED },
+      { type: 'image', src: 'sf-symbol:' + icon, width: cfg.iconSize, height: cfg.iconSize, color: ICON_MUTED },
       { type: 'text', text: valueText == null ? '-' : valueText, font: { size: cfg.valueFont, weight: 'bold' }, textColor: color },
     ],
   };
@@ -300,7 +308,7 @@ function delayLossColumns(ms, lossPct, delayBlocks, lossBlocks, colW, cfg) {
       {
         type: 'stack', direction: 'row', alignItems: 'center', gap: 4,
         children: [
-          { type: 'image', src: 'sf-symbol:' + icon, width: 11, height: 11, color: MUTED },
+          { type: 'image', src: 'sf-symbol:' + icon, width: cfg.iconSize, height: cfg.iconSize, color: ICON_MUTED },
           cfg.showLabel ? textMuted(label, cfg.labelFont) : null,
           { type: 'spacer' },
           { type: 'text', text: valueText, font: { size: cfg.valueFont, weight: 'bold' }, textColor: valueColor },
@@ -327,14 +335,14 @@ function formatTime(ts) {
   return hh + ':' + mm;
 }
 
-function headerRow(region, name, isOnline, lastUpdated) {
+function headerRow(region, name, isOnline, lastUpdated, cfg) {
   return {
     type: 'stack', direction: 'row', alignItems: 'center', gap: 6,
     children: [
-      { type: 'image', src: 'sf-symbol:circle.fill', width: 7, height: 7, color: isOnline ? '#2ECC71' : '#E74C3C' },
-      { type: 'text', text: region || '-', font: { size: 'caption1', weight: 'semibold' }, textColor: MUTED },
-      { type: 'text', text: name || '-', font: { size: 'footnote', weight: 'bold' }, textColor: { light: '#111111', dark: '#FFFFFF' }, flex: 1, maxLines: 1, minScale: 0.7 },
-      { type: 'text', text: formatTime(lastUpdated), font: { size: 'caption2' }, textColor: MUTED },
+      { type: 'image', src: 'sf-symbol:circle.fill', width: cfg.dotSize, height: cfg.dotSize, color: isOnline ? '#2ECC71' : '#E74C3C' },
+      { type: 'text', text: region || '-', font: { size: cfg.headerRegionFont, weight: 'medium' }, textColor: MUTED },
+      { type: 'text', text: name || '-', font: { size: cfg.headerNameFont, weight: 'bold' }, textColor: PRIMARY_TEXT, flex: 1, maxLines: 1, minScale: 0.7 },
+      { type: 'text', text: formatTime(lastUpdated), font: { size: cfg.headerTimeFont, weight: 'regular' }, textColor: MUTED },
     ],
   };
 }
@@ -422,7 +430,7 @@ export default async function (ctx) {
   const innerW = cfg.width - cfg.padding * 2;
 
   const children = [
-    headerRow(server.region, server.name, isOnline, lastUpdated),
+    headerRow(server.region, server.name, isOnline, lastUpdated, cfg),
     {
       type: 'stack', direction: 'column', gap: cfg.tightGap,
       children: [
@@ -491,7 +499,7 @@ export default async function (ctx) {
             textMuted('剩余流量', cfg.labelFont),
             { type: 'text', text: remainBytes == null ? '-' : humanBytes(remainBytes), font: { size: cfg.valueFont, weight: 'bold' }, textColor: usageColor(usedPct) },
             { type: 'spacer' },
-            { type: 'text', text: limitBytes > 0 ? humanBytes(usedBytes) + ' / ' + humanBytes(limitBytes) : '-', font: { size: 'caption2' }, textColor: MUTED },
+            { type: 'text', text: limitBytes > 0 ? humanBytes(usedBytes) + ' / ' + humanBytes(limitBytes) : '-', font: { size: cfg.labelFont }, textColor: MUTED },
           ],
         },
         { type: 'image', src: svgBar(remainPct, usageColor(usedPct), trafficBarW, cfg.barH), width: trafficBarW, height: cfg.barH },
