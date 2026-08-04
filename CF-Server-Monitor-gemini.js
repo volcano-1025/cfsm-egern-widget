@@ -1,18 +1,26 @@
 /**
  * Egern Single Server Monitor Widget for CF-Server-Monitor
- * 已修复：全局异常兜底（彻底解决 Missing required key 'type' at $ 报错）
+ * 适配：公开 API（免登录）、智能 URL 清理、透传错误响应
  */
 
 export default async function(ctx) {
-  // 最外层全局 try-catch 兜底，确保无论发生何种错误，均 100% 返回带 type: 'widget' 的对象
+  // 最外层全局 try-catch 兜底，确保 100% 返回带 type: 'widget' 的对象，绝不崩溃
   try {
     const family = ctx?.widgetFamily || 'systemMedium';
     const env = ctx?.env || {};
 
-    // 1. 读取环境变量
-    const BASE_URL = (env.BASE_URL || '').replace(/\/+$/, '');
-    const SERVER_ID = env.SERVER_ID || '';
-    const ISP_LINE = env.ISP_LINE || '默认';
+    // 1. 智能清理 BASE_URL (自动抹除末尾的 /、/#/、/api)
+    let BASE_URL = (env.BASE_URL || '').trim();
+    while (BASE_URL.endsWith('/') || BASE_URL.endsWith('#')) {
+      BASE_URL = BASE_URL.slice(0, -1).trim();
+    }
+    if (BASE_URL.endsWith('/api')) {
+      BASE_URL = BASE_URL.slice(0, -4).trim();
+    }
+
+    const SERVER_ID = (env.SERVER_ID || '').trim();
+    const ISP_LINE = (env.ISP_LINE || '默认').trim();
+    const TOKEN = (env.TOKEN || env.JWT_TOKEN || '').trim();
 
     // 2. 状态调色盘 (绿色 -> 嫩绿色 -> 黄绿色 -> 黄色 -> 红色)
     const PALETTE = {
@@ -26,7 +34,6 @@ export default async function(ctx) {
       TEXT_SUB: '#8E8E93'
     };
 
-    // 色阶映射
     function getColor(val, thresholds = [20, 40, 65, 85]) {
       if (val === undefined || val === null || isNaN(val)) return PALETTE.GREEN;
       if (val < thresholds[0]) return PALETTE.GREEN;
@@ -39,7 +46,6 @@ export default async function(ctx) {
     function getPingColor(ms) { return getColor(ms, [30, 70, 130, 220]); }
     function getLossColor(loss) { return getColor(loss, [0.1, 0.5, 2.0, 5.0]); }
 
-    // 格式化字节
     function formatBytes(bytes) {
       if (!bytes || bytes <= 0) return '0 B';
       const k = 1024;
@@ -48,22 +54,16 @@ export default async function(ctx) {
       return (bytes / Math.pow(k, i)).toFixed(1) + ' ' + sizes[i];
     }
 
-    // 安全转换国旗/地区 Emoji (防护中文及非法字符)
     function getFlagEmoji(code) {
       if (!code || typeof code !== 'string') return '🌐';
       const trimmed = code.trim();
       if (/^[A-Za-z]{2}$/.test(trimmed)) {
         const pts = trimmed.toUpperCase().split('').map(c => 127397 + c.charCodeAt(0));
-        try {
-          return String.fromCodePoint(...pts);
-        } catch (e) {
-          return trimmed;
-        }
+        try { return String.fromCodePoint(...pts); } catch (e) { return trimmed; }
       }
       return trimmed;
     }
 
-    // 绘制标准内联 SVG 进度条
     function createSvgBar(pct, color, w = 60, h = 5) {
       const val = Math.min(Math.max(pct || 0, 0), 100);
       const fillW = Math.round((val / 100) * w);
@@ -72,48 +72,77 @@ export default async function(ctx) {
       return `data:image/svg+xml,${svg}`;
     }
 
-    // 错误卡片构造器
-    function renderErrorCard(message) {
+    function renderErrorCard(title, message) {
       return {
         type: 'widget',
         padding: 16,
         backgroundColor: PALETTE.BG,
         children: [
           { type: 'spacer' },
-          { type: 'text', text: '⚠️ 监控组件提示', font: { size: 'headline', weight: 'bold' }, textColor: PALETTE.RED },
+          { type: 'text', text: `⚠️ ${title}`, font: { size: 'headline', weight: 'bold' }, textColor: PALETTE.RED },
           { type: 'spacer', length: 6 },
-          { type: 'text', text: String(message), font: { size: 'footnote' }, textColor: PALETTE.TEXT_SUB, maxLines: 4 },
+          { type: 'text', text: String(message), font: { size: 'footnote' }, textColor: PALETTE.TEXT_SUB, maxLines: 6 },
           { type: 'spacer' }
         ]
       };
     }
 
     if (!BASE_URL) {
-      return renderErrorCard('未配置 BASE_URL 环境变量，请在 Egern 的环境变量中配置 BASE_URL。');
+      return renderErrorCard('未配置 BASE_URL', '请在 Egern 环境变量中增加 BASE_URL (如 https://monitor.domain.com)。');
     }
 
-    // 3. 安全请求网络数据
-    let serversData = [];
+    // 3. 构造请求
+    const headers = { 'Accept': 'application/json' };
+    if (TOKEN) {
+      headers['Authorization'] = TOKEN.startsWith('Bearer ') ? TOKEN : `Bearer ${TOKEN}`;
+    }
+
+    const apiUrl = `${BASE_URL}/api/servers`;
+    let resp = null;
+    let httpStatus = 200;
+
     try {
-      const apiUrl = `${BASE_URL}/api/servers`;
-      const resp = await ctx.http.get(apiUrl, { timeout: 10000 });
-      if (resp.status < 200 || resp.status >= 300) {
-        return renderErrorCard(`API 状态码非 200: HTTP ${resp.status}`);
-      }
-      serversData = await resp.json();
+      resp = await ctx.http.get(apiUrl, { headers, timeout: 10000 });
+      if (resp && resp.status) httpStatus = resp.status;
     } catch (e) {
-      return renderErrorCard(`无法连接 API (${BASE_URL}):\n${e?.message || e}`);
+      return renderErrorCard('网络请求失败', `无法请求接口:\n${apiUrl}\n错误信息: ${e?.message || e}`);
     }
 
-    if (!Array.isArray(serversData) || serversData.length === 0) {
-      return renderErrorCard('API 返回数据为空或格式不正确。');
+    // 4. 超超级兼容的数据体解析
+    let rawBody = null;
+    if (resp) {
+      if (typeof resp.json === 'function') {
+        try { rawBody = await resp.json(); } catch (e) {}
+      }
+      if (!rawBody && resp.data !== undefined) rawBody = resp.data;
+      if (!rawBody && resp.body !== undefined) rawBody = resp.body;
+      if (!rawBody && typeof resp === 'string') rawBody = resp;
     }
 
-    // 匹配 SERVER_ID
-    let server = serversData.find(s => String(s.id) === String(SERVER_ID) || String(s.name) === String(SERVER_ID));
-    if (!server) server = serversData[0];
+    if (typeof rawBody === 'string') {
+      try { rawBody = JSON.parse(rawBody); } catch (e) {}
+    }
 
-    // 4. 数据标准化解析
+    // 提炼服务器列表
+    let serversList = null;
+    if (Array.isArray(rawBody)) {
+      serversList = rawBody;
+    } else if (rawBody && typeof rawBody === 'object') {
+      if (Array.isArray(rawBody.servers)) serversList = rawBody.servers;
+      else if (Array.isArray(rawBody.data)) serversList = rawBody.data;
+    }
+
+    // 若解析失败，透传原始响应，方便调试
+    if (!serversList || serversList.length === 0) {
+      const rawText = typeof rawBody === 'object' ? JSON.stringify(rawBody) : String(rawBody || '空响应');
+      return renderErrorCard('API 响应数据非有效列表', `请求地址: ${apiUrl}\nHTTP 状态: ${httpStatus}\n返回原始数据: ${rawText.slice(0, 150)}`);
+    }
+
+    // 匹配 SERVER_ID，若无匹配则展示列表中的第 1 台
+    let server = serversList.find(s => String(s.id) === String(SERVER_ID) || String(s.name) === String(SERVER_ID));
+    if (!server) server = serversList[0];
+
+    // 5. 解析 14 项监控指标
     const isOnline = server.online !== false;
     const serverName = server.name || server.id || '未知主机';
     const flag = getFlagEmoji(server.location || server.region || '');
@@ -131,7 +160,7 @@ export default async function(ctx) {
     const diskPct = server.disk?.percent ?? (server.disk ? (server.disk.used / server.disk.total * 100) : 0);
     const diskUsedStr = formatBytes(server.disk?.used);
 
-    // 负载 & 在线天数
+    // 5分钟负载与在线天数
     const load5 = Array.isArray(server.load) ? (server.load[1] ?? server.load[0] ?? 0) : (server.load5 || server.load || 0);
     const uptimeDays = Math.floor((server.uptime || 0) / 86400);
 
@@ -154,7 +183,7 @@ export default async function(ctx) {
     const transferMax = server.net?.transfer_max || server.network?.transfer_max || 0;
     const trafficStr = transferMax > 0 ? `${formatBytes(totalUsed)} / ${formatBytes(transferMax)}` : formatBytes(totalUsed);
 
-    // Ping & 丢包率提取
+    // Ping & 丢包率匹配
     let pingData = { latency: 0, latency_1h: 0, loss_1h: 0 };
     if (server.ping && typeof server.ping === 'object') {
       const lineKey = Object.keys(server.ping).find(k => k.toLowerCase().includes(ISP_LINE.toLowerCase())) || Object.keys(server.ping)[0];
@@ -168,7 +197,7 @@ export default async function(ctx) {
 
     const linkUrl = `${BASE_URL}/#/server/${server.id || ''}`;
 
-    // 颜色计算
+    // 动态配色
     const cpuColor = getColor(cpuPct);
     const memColor = getColor(memPct);
     const diskColor = getColor(diskPct);
@@ -178,7 +207,7 @@ export default async function(ctx) {
     const statusColor = isOnline ? PALETTE.GREEN : PALETTE.RED;
 
     // ==========================================
-    // 5. 根据尺寸生成小组件 DSL
+    // 6. DSL 尺寸生成 (Small / Medium / Large)
     // ==========================================
 
     // --- 小尺寸 (systemSmall) ---
@@ -490,7 +519,7 @@ export default async function(ctx) {
     };
 
   } catch (fatalErr) {
-    // 顶层致命异常兜底：若有任何未捕获错误，在此返回红字提示卡片，绝不返回 undefined
+    // 全局致命异常兜底，防止桌面渲染失败
     return {
       type: 'widget',
       padding: 16,
@@ -499,7 +528,7 @@ export default async function(ctx) {
         { type: 'spacer' },
         { type: 'text', text: '⚠️ 监控小组件运行异常', font: { size: 'headline', weight: 'bold' }, textColor: '#FF3B30' },
         { type: 'spacer', length: 6 },
-        { type: 'text', text: String(fatalErr?.message || fatalErr), font: { size: 'footnote' }, textColor: '#8E8E93', maxLines: 4 },
+        { type: 'text', text: String(fatalErr?.message || fatalErr), font: { size: 'footnote' }, textColor: '#8E8E93', maxLines: 5 },
         { type: 'spacer' }
       ]
     };
