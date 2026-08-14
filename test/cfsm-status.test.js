@@ -75,13 +75,21 @@ describe("latencyColor", () => {
     expect(latencyColor(-1).dark).toBe("#9198a1");
   });
 
-  it("色值与主题 tokens.css 的 --latency-* 逐一对上", () => {
-    expect(latencyColor(50)).toEqual({ light: "#2fc66e", dark: "#2fc66e" });
-    expect(latencyColor(80)).toEqual({ light: "#9fe339", dark: "#9fe339" });
-    expect(latencyColor(140)).toEqual({ light: "#cbd83a", dark: "#cbd83a" });
-    expect(latencyColor(180)).toEqual({ light: "#e2a928", dark: "#e2a928" });
-    // 只有 critical 一档主题本身就分浅深色
-    expect(latencyColor(300)).toEqual({ light: "#dc2626", dark: "#f47067" });
+  it("深色逐值等于主题 tokens.css 的 --latency-*", () => {
+    expect(latencyColor(50).dark).toBe("#2fc66e");
+    expect(latencyColor(80).dark).toBe("#9fe339");
+    expect(latencyColor(140).dark).toBe("#cbd83a");
+    expect(latencyColor(180).dark).toBe("#e2a928");
+    expect(latencyColor(300).dark).toBe("#f47067");
+  });
+
+  it("浅色同色相压深一档，白底上才读得出来", () => {
+    expect(latencyColor(50).light).toBe("#15803d");
+    expect(latencyColor(80).light).toBe("#4d7c0f");
+    expect(latencyColor(140).light).toBe("#a16207");
+    expect(latencyColor(180).light).toBe("#b45309");
+    // critical 的浅色本来就是主题给的值，不用另调
+    expect(latencyColor(300).light).toBe("#dc2626");
   });
 });
 
@@ -336,18 +344,18 @@ describe("readEnv", () => {
     expect(readEnv({ env: { SORT: "乱写" } }).sort).toBe("order");
   });
 
-  it("BACKGROUND 默认毛玻璃", () => {
-    expect(readEnv({ env: {} }).background).toBe("glass");
-    expect(readEnv({ env: { BACKGROUND: "system" } }).background).toBe("system");
+  it("BACKGROUND 默认交给系统材质", () => {
+    expect(readEnv({ env: {} }).background).toBe("system");
+    expect(readEnv({ env: { BACKGROUND: "glass" } }).background).toBe("glass");
     expect(readEnv({ env: { BACKGROUND: "solid" } }).background).toBe("solid");
     expect(readEnv({ env: { BACKGROUND: "clear" } }).background).toBe("clear");
-    expect(readEnv({ env: { BACKGROUND: "乱写" } }).background).toBe("glass");
+    expect(readEnv({ env: { BACKGROUND: "乱写" } }).background).toBe("system");
   });
 
-  it("LATENCY_STYLE 默认色块", () => {
-    expect(readEnv({ env: {} }).latencyStyle).toBe("chip");
-    expect(readEnv({ env: { LATENCY_STYLE: "text" } }).latencyStyle).toBe("text");
-    expect(readEnv({ env: { LATENCY_STYLE: "乱写" } }).latencyStyle).toBe("chip");
+  it("LATENCY_STYLE 默认纯文字", () => {
+    expect(readEnv({ env: {} }).latencyStyle).toBe("text");
+    expect(readEnv({ env: { LATENCY_STYLE: "chip" } }).latencyStyle).toBe("chip");
+    expect(readEnv({ env: { LATENCY_STYLE: "乱写" } }).latencyStyle).toBe("text");
   });
 
   it("没有 env 也不炸", () => {
@@ -463,17 +471,19 @@ describe("三个尺寸产出的 DSL", () => {
 
   it("BACKGROUND 决定根节点铺什么背景", async () => {
     for (const family of ["systemSmall", "systemMedium", "systemLarge"]) {
-      const glass = await render(ctxWith({ family, env: { NODE: "hk-01" } }), NOW);
+      // 默认什么都不铺：Egern 的容器底本来就是不透明的，再压一层灰只会更脏
+      const system = await render(ctxWith({ family, env: { NODE: "hk-01" } }), NOW);
+      expect(validateTree(system)).toEqual([]);
+      expect(system.backgroundGradient).toBeUndefined();
+      expect(system.backgroundColor).toBeUndefined();
+
+      const glass = await render(
+        ctxWith({ family, env: { NODE: "hk-01", BACKGROUND: "glass" } }),
+        NOW,
+      );
       expect(validateTree(glass)).toEqual([]);
       expect(glass.backgroundGradient?.type).toBe("linear");
       expect(glass.backgroundColor).toBeUndefined();
-
-      const system = await render(
-        ctxWith({ family, env: { NODE: "hk-01", BACKGROUND: "system" } }),
-        NOW,
-      );
-      expect(system.backgroundGradient).toBeUndefined();
-      expect(system.backgroundColor).toBeUndefined();
 
       const solid = await render(
         ctxWith({ family, env: { NODE: "hk-01", BACKGROUND: "solid" } }),
@@ -484,27 +494,16 @@ describe("三个尺寸产出的 DSL", () => {
     }
   });
 
-  it("延迟默认画成色块：底色带主题色调，数字用正文色保证可读", async () => {
-    const tree = await render(ctxWith({ family: "systemMedium", env: { NODES: "us-la" } }), NOW);
-    const chips = [];
-    const walk = (n) => {
-      if (!n || typeof n !== "object") return;
-      if (n.type === "stack" && n.borderRadius === 4) chips.push(n);
-      (n.children ?? []).forEach(walk);
-    };
-    walk(tree);
-    expect(chips).toHaveLength(1);
-    // us-la 电信 152ms 属于 moderate 档（#cbd83a），底色是同色的三成透明
-    expect(chips[0].backgroundColor.light).toBe("rgba(203, 216, 58, 0.3)");
-    expect(chips[0].children[0].textColor).toEqual({ light: "#18181b", dark: "#d1d7e0" });
-    expect(chips[0].children[0].text).toBe("152");
-  });
+  const findChips = (node, out = []) => {
+    if (!node || typeof node !== "object") return out;
+    if (node.type === "stack" && node.borderRadius === 4) out.push(node);
+    (node.children ?? []).forEach((child) => findChips(child, out));
+    return out;
+  };
 
-  it("LATENCY_STYLE=text 回到把数字直接染成延迟色", async () => {
-    const tree = await render(
-      ctxWith({ family: "systemMedium", env: { NODES: "us-la", LATENCY_STYLE: "text" } }),
-      NOW,
-    );
+  it("延迟默认是纯文字，直接染成延迟色", async () => {
+    const tree = await render(ctxWith({ family: "systemMedium", env: { NODES: "us-la" } }), NOW);
+    expect(findChips(tree)).toHaveLength(0);
     let found = null;
     const walk = (n) => {
       if (!n || typeof n !== "object") return;
@@ -512,19 +511,28 @@ describe("三个尺寸产出的 DSL", () => {
       (n.children ?? []).forEach(walk);
     };
     walk(tree);
-    expect(found.textColor).toEqual({ light: "#cbd83a", dark: "#cbd83a" });
+    // us-la 电信 152ms 属于 moderate 档
+    expect(found.textColor).toEqual({ light: "#a16207", dark: "#cbd83a" });
+  });
+
+  it("LATENCY_STYLE=chip 改成延迟色当底、数字用正文色", async () => {
+    const tree = await render(
+      ctxWith({ family: "systemMedium", env: { NODES: "us-la", LATENCY_STYLE: "chip" } }),
+      NOW,
+    );
+    const chips = findChips(tree);
+    expect(chips).toHaveLength(1);
+    expect(chips[0].backgroundColor.dark).toBe("rgba(203, 216, 58, 0.3)");
+    expect(chips[0].children[0].textColor).toEqual({ light: "#18181b", dark: "#d1d7e0" });
+    expect(chips[0].children[0].text).toBe("152");
   });
 
   it("没有延迟数据时不画色块，留一个破折号", async () => {
-    const tree = await render(ctxWith({ family: "systemMedium", env: { NODES: "de-fra" } }), NOW);
-    const chips = [];
-    const walk = (n) => {
-      if (!n || typeof n !== "object") return;
-      if (n.type === "stack" && n.borderRadius === 4) chips.push(n);
-      (n.children ?? []).forEach(walk);
-    };
-    walk(tree);
-    expect(chips).toHaveLength(0);
+    const tree = await render(
+      ctxWith({ family: "systemMedium", env: { NODES: "de-fra", LATENCY_STYLE: "chip" } }),
+      NOW,
+    );
+    expect(findChips(tree)).toHaveLength(0);
     expect(collectText(tree)).toContain("—");
   });
 

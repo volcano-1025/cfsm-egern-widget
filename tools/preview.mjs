@@ -239,9 +239,9 @@ const PAGES = {
       makeCtx({ family: "systemMedium", env: { SORT: "health" } }),
     ],
     [
-      "中 · 背景 system",
+      "中 · 背景 glass",
       "systemMedium",
-      makeCtx({ family: "systemMedium", env: { BACKGROUND: "system" } }),
+      makeCtx({ family: "systemMedium", env: { BACKGROUND: "glass" } }),
     ],
     [
       "中 · 背景 solid",
@@ -249,14 +249,9 @@ const PAGES = {
       makeCtx({ family: "systemMedium", env: { BACKGROUND: "solid" } }),
     ],
     [
-      "中 · 背景 clear",
+      "中 · 延迟色块",
       "systemMedium",
-      makeCtx({ family: "systemMedium", env: { BACKGROUND: "clear" } }),
-    ],
-    [
-      "中 · 延迟纯文字",
-      "systemMedium",
-      makeCtx({ family: "systemMedium", env: { LATENCY_STYLE: "text" } }),
+      makeCtx({ family: "systemMedium", env: { LATENCY_STYLE: "chip" } }),
     ],
     [
       "中 · 只有 3 台",

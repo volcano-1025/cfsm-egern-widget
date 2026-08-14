@@ -49,14 +49,18 @@ const COLORS = {
 };
 
 /**
- * 延迟阶梯配色，档位、阈值与色值逐一抄自主题 tokens.css 的 --latency-* 与
- * metricTone.ts 的 latencyHeatColor。浅深色只有 critical 一档不同，其余两套值相同。
+ * 延迟阶梯配色。档位与阈值抄自主题 metricTone.ts 的 latencyHeatColor。
+ *
+ * **深色逐值等于主题 tokens.css 的 --latency-*；浅色同色相压深一档。**
+ * 主题那几档（#9fe339 / #cbd83a）是画在深色卡片和色带上的黄绿，直接当文字色摆在浅色
+ * 小组件上根本读不出来。注意这不是自作主张：主题自己的 --latency-critical 就是浅深两套值
+ * （浅 #dc2626 / 深 #f47067），这里只是把同一个做法延伸到另外几档。
  */
 const LATENCY_COLORS = {
-  excellent: { light: "#2fc66e", dark: "#2fc66e" },
-  good: { light: "#9fe339", dark: "#9fe339" },
-  moderate: { light: "#cbd83a", dark: "#cbd83a" },
-  elevated: { light: "#e2a928", dark: "#e2a928" },
+  excellent: { light: "#15803d", dark: "#2fc66e" },
+  good: { light: "#4d7c0f", dark: "#9fe339" },
+  moderate: { light: "#a16207", dark: "#cbd83a" },
+  elevated: { light: "#b45309", dark: "#e2a928" },
   critical: { light: "#dc2626", dark: "#f47067" },
 };
 
@@ -116,11 +120,11 @@ const CARRIER_ALIASES = {
 };
 
 /**
- * 毛玻璃背景。
+ * 灰玻璃底色。
  *
- * DSL 没有模糊原语 —— 真正的毛玻璃是系统给的：小组件本来就浮在一层材质上。
- * 这里做的是在那层材质之上压一层半透明灰，让它呈现出原生电池、天气那类小组件的质感。
- * 上深下浅的线性渐变比平涂更像玻璃：光从上方来。
+ * **做不出原生小组件那种真透明**：真机验证过，Egern 自己铺了一层不透明的容器底，
+ * 我们给的颜色只能压在它上面 —— 连 `clear`（全透明）出来也还是一块浅灰，透不出壁纸。
+ * 所以这一档不是「毛玻璃」，只是一层上深下浅的灰色渐变，权当换个质感，默认不启用。
  */
 const GLASS_GRADIENT = {
   type: "linear",
@@ -136,9 +140,8 @@ const GLASS_GRADIENT = {
 const SOLID_BACKGROUND = { light: "#ffffff", dark: "#22272e" };
 
 /**
- * 全透明。用来判断 Egern 到底有没有自己铺一层不透明的容器底：
- * 如果它只画我们给的颜色，这一档就能透出壁纸；如果仍是一块浅灰，说明容器底是不透明的，
- * 那么无论我们把 alpha 调到多低，都做不出原生小组件那种真透明。
+ * 全透明。真机上与 `system` 看不出区别 —— Egern 的容器底是不透明的，这一档透不出壁纸。
+ * 留着是为了记住这个结论，以后 Egern 若支持了容器透明，这里就是现成的开关。
  */
 const CLEAR_BACKGROUND = "rgba(0, 0, 0, 0)";
 
@@ -246,19 +249,19 @@ export function normalizeSort(raw) {
   return /^(health|负载|健康)$/.test(key) ? "health" : "order";
 }
 
-/** BACKGROUND 环境变量 → 背景样式。认不出来的一律当 glass。 */
+/** BACKGROUND 环境变量 → 背景样式。认不出来的一律当 system。 */
 export function normalizeBackground(raw) {
   const key = String(raw ?? "").trim().toLowerCase();
-  if (/^(system|none|默认|系统)$/.test(key)) return "system";
+  if (/^(glass|毛玻璃|玻璃)$/.test(key)) return "glass";
   if (/^(solid|不透明|纯色)$/.test(key)) return "solid";
   if (/^(clear|transparent|透明)$/.test(key)) return "clear";
-  return "glass";
+  return "system";
 }
 
-/** LATENCY_STYLE 环境变量 → 延迟数值的画法。认不出来的一律当 chip。 */
+/** LATENCY_STYLE 环境变量 → 延迟数值的画法。认不出来的一律当 text。 */
 export function normalizeLatencyStyle(raw) {
   const key = String(raw ?? "").trim().toLowerCase();
-  return /^(text|文字|纯文字)$/.test(key) ? "text" : "chip";
+  return /^(chip|色块|底色)$/.test(key) ? "chip" : "text";
 }
 
 /** CARRIER 环境变量 → 线路 key 或 "auto"。认不出来的一律当 auto。 */
@@ -565,10 +568,8 @@ function withAlpha(color, alpha) {
 /**
  * 延迟数值。
  *
- * `chip`（默认）把主题的延迟色画成底色、数字本身用正文色 —— 延迟档位仍然一眼可辨，
- * 但可读性不再取决于那几档颜色本身。主题的 --latency-good / --latency-moderate
- * 是画在深色卡片上的黄绿，直接当文字色摆在浅色小组件上根本看不清。
- * `text` 是老做法：数字直接染成延迟色。
+ * `text`（默认）把数字直接染成延迟色 —— 可读性靠 LATENCY_COLORS 里压深过的浅色档位保证。
+ * `chip` 改成「延迟色当底、数字用正文色」，可读性最好但一行里多出几块色斑，观感偏花。
  */
 function latencyValue(ms, { width, size, style, suffix = "" }) {
   const tone = latencyColor(ms);
