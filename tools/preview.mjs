@@ -28,6 +28,12 @@ const SIZES = {
   systemLarge: [338, 354],
 };
 
+/**
+ * Mac 通知中心的小组件比 iPhone 高一截，节点又常常没那么多，剩余空间最多，
+ * 最容易暴露「行被拉开」的问题 —— 专门留一档尺寸来复现。
+ */
+const MAC_LARGE = [360, 376];
+
 function makeCtx({ family, env = {}, response }) {
   return {
     widgetFamily: family,
@@ -161,9 +167,9 @@ function toHtml(node, scheme, parentDirection = "column") {
 
 // ---------------------------------------------------------------- 页面组装
 
-async function card(label, family, ctx) {
+async function card(label, family, ctx, size) {
   const dsl = await render(ctx, NOW);
-  const [w, h] = SIZES[family] ?? SIZES.systemSmall;
+  const [w, h] = size ?? SIZES[family] ?? SIZES.systemSmall;
   // 放大只是 transform，不参与布局，尺寸仍按真实点数排版。
   return ["light", "dark"]
     .map(
@@ -179,11 +185,23 @@ async function card(label, family, ctx) {
 }
 
 const OFFLINE_ONLY = SERVERS.filter((s) => s.id === "de-fra");
+/** 只有 4 台机器，模拟节点少、剩余空间多的真实面板。 */
+const FEW = SERVERS.filter((s) => ["hk-01", "jp-tokyo", "us-la", "sg-01"].includes(s.id));
 
 /** 按尺寸分文件输出：每个文件都在首屏，省得截图时靠滚动定位。 */
 const PAGES = {
   small: [
     ["小 · 指定节点", "systemSmall", makeCtx({ family: "systemSmall", env: { NODE: "hk-01" } })],
+    [
+      "小 · 指定线路（移动）",
+      "systemSmall",
+      makeCtx({ family: "systemSmall", env: { NODE: "hk-01", CARRIER: "移动" } }),
+    ],
+    [
+      "小 · 有丢包",
+      "systemSmall",
+      makeCtx({ family: "systemSmall", env: { NODE: "us-la", CARRIER: "cm" } }),
+    ],
     ["小 · 离线节点", "systemSmall", makeCtx({ family: "systemSmall", env: { NODE: "de-fra" } })],
     ["小 · 长名字", "systemSmall", makeCtx({ family: "systemSmall", env: { NODE: "jp-tokyo" } })],
     [
@@ -218,6 +236,25 @@ const PAGES = {
           json: async () => buildSnapshot(SERVERS.filter((s) => s.is_online)),
         },
       }),
+    ],
+    [
+      "大 · Mac 尺寸 · 只有 4 台",
+      "systemLarge",
+      makeCtx({
+        family: "systemLarge",
+        response: { status: 200, json: async () => buildSnapshot(FEW) },
+      }),
+      MAC_LARGE,
+    ],
+    [
+      "大 · Mac 尺寸 · 指定电信",
+      "systemLarge",
+      makeCtx({
+        family: "systemLarge",
+        env: { CARRIER: "ct" },
+        response: { status: 200, json: async () => buildSnapshot(FEW) },
+      }),
+      MAC_LARGE,
     ],
   ],
   errors: [
@@ -273,7 +310,9 @@ function page(title, cards) {
 }
 
 for (const [name, entries] of Object.entries(PAGES)) {
-  const cards = await Promise.all(entries.map(([label, family, ctx]) => card(label, family, ctx)));
+  const cards = await Promise.all(
+    entries.map(([label, family, ctx, size]) => card(label, family, ctx, size)),
+  );
   const out = resolve(root, `preview-${name}.html`);
   writeFileSync(out, page(`cfsm-status 预览 · ${name}`, cards));
   console.log(`预览已生成：${out}`);

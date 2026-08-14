@@ -1,20 +1,23 @@
 import { describe, expect, it } from "vitest";
 import {
-  bestPing,
   deriveStats,
   flagEmoji,
   formatBytes,
+  formatLoss,
   formatRate,
   isOnline,
   latencyColor,
+  lossColor,
   metricsOf,
+  normalizeCarrier,
   pickList,
   pickOne,
+  pingOf,
   readEnv,
   render,
 } from "../cfsm-status.js";
 import { NOW, SERVERS, buildSnapshot } from "./fixture.js";
-import { collectText, countNodeRows, validateTree } from "./dsl-schema.js";
+import { collectNodeRows, collectText, countNodeRows, validateTree } from "./dsl-schema.js";
 
 const API_BASE = "https://status.example.com";
 
@@ -103,16 +106,82 @@ describe("isOnline", () => {
   });
 });
 
-describe("bestPing", () => {
-  it("取三网里最小的一条，不看 BD", () => {
-    // hk-01 的 bd 是 21，比电信的 38 更低，但不该被选中
-    expect(bestPing(SERVERS.find((s) => s.id === "hk-01"))).toBe(38);
+describe("normalizeCarrier", () => {
+  it("认中英文与常见别名", () => {
+    expect(normalizeCarrier("ct")).toBe("ct");
+    expect(normalizeCarrier("电信")).toBe("ct");
+    expect(normalizeCarrier("Unicom")).toBe("cu");
+    expect(normalizeCarrier("CMCC")).toBe("cm");
+    expect(normalizeCarrier("bd")).toBe("bd");
   });
 
-  it("跳过 null 与负值（负值在后端语义里是探测失败）", () => {
-    expect(bestPing({ ping_ct: null, ping_cu: 50, ping_cm: null })).toBe(50);
-    expect(bestPing({ ping_ct: -1, ping_cu: 50, ping_cm: null })).toBe(50);
-    expect(bestPing({ ping_ct: null, ping_cu: null, ping_cm: null })).toBe(null);
+  it("空值与认不出来的写法都退回 auto", () => {
+    expect(normalizeCarrier("")).toBe("auto");
+    expect(normalizeCarrier(undefined)).toBe("auto");
+    expect(normalizeCarrier("移动宽带")).toBe("auto");
+  });
+});
+
+describe("pingOf", () => {
+  const hk = SERVERS.find((s) => s.id === "hk-01");
+
+  it("auto 取三网里最小的一条，不看 BD", () => {
+    // hk-01 的 bd 是 21，比电信的 38 更低，但不该被选中
+    expect(pingOf(hk, "auto")).toMatchObject({ key: "ct", ms: 38, label: "电信" });
+  });
+
+  it("auto 会带出胜出线路自己的丢包，而不是别条的", () => {
+    const server = {
+      ping_ct: 200,
+      loss_ct: 9,
+      ping_cu: 50,
+      loss_cu: 1,
+      ping_cm: null,
+      loss_cm: 40,
+    };
+    expect(pingOf(server, "auto")).toMatchObject({ key: "cu", ms: 50, loss: 1 });
+  });
+
+  it("指定线路就认那一条，没有值也不回退到别条", () => {
+    // hk-01 三网都有值，点名移动就得是 74
+    expect(pingOf(hk, "cm").ms).toBe(74);
+    // jp-tokyo 只有电信有值，点名联通只能是空
+    const jp = SERVERS.find((s) => s.id === "jp-tokyo");
+    expect(pingOf(jp, "cu")).toMatchObject({ key: "cu", ms: null, loss: null });
+    expect(pingOf(jp, "ct")).toMatchObject({ ms: 61, loss: 2 });
+  });
+
+  it("负延迟按探测失败处理", () => {
+    expect(pingOf({ ping_ct: -1, ping_cu: 50 }, "auto").ms).toBe(50);
+    expect(pingOf({ ping_ct: -1 }, "ct").ms).toBe(null);
+  });
+
+  it("全丢包时延迟为空但丢包要显示出来", () => {
+    const dead = { ping_ct: null, loss_ct: 100, ping_cu: null, ping_cm: null };
+    expect(pingOf(dead, "auto")).toMatchObject({ key: "ct", ms: null, loss: 100 });
+  });
+
+  it("什么都没有时给一组空值，不会抛", () => {
+    expect(pingOf({}, "auto")).toMatchObject({ ms: null, loss: null });
+    expect(pingOf(undefined, "ct")).toMatchObject({ ms: null, loss: null });
+  });
+});
+
+describe("丢包展示", () => {
+  it("不足 1% 保留一位小数，免得把偶发丢包抹成 0", () => {
+    expect(formatLoss(0)).toBe("0%");
+    expect(formatLoss(0.4)).toBe("0.4%");
+    expect(formatLoss(1.5)).toBe("2%");
+    expect(formatLoss(16.7)).toBe("17%");
+    expect(formatLoss(null)).toBe("—");
+  });
+
+  it("0% 用次要文字色，有丢包才逐档升温", () => {
+    expect(lossColor(0).dark).toBe("#9198a1");
+    expect(lossColor(null).dark).toBe("#9198a1");
+    expect(lossColor(1).dark).not.toBe(lossColor(0).dark);
+    expect(lossColor(5).dark).not.toBe(lossColor(1).dark);
+    expect(lossColor(50).dark).not.toBe(lossColor(5).dark);
   });
 });
 
@@ -219,13 +288,18 @@ describe("readEnv", () => {
     expect(env.apiBase).toBe("https://a.com");
     expect(env.title).toBe("服务器状态");
     expect(env.rows).toBe(null);
-    expect(env.refreshMinutes).toBe(5);
+    expect(env.carrier).toBe("auto");
+    expect(env.refreshMinutes).toBe(1);
   });
 
   it("非法的 ROWS / REFRESH 退回默认，不会算出 NaN 时间", () => {
     const env = readEnv({ env: { ROWS: "abc", REFRESH: "-3" } });
     expect(env.rows).toBe(null);
-    expect(env.refreshMinutes).toBe(5);
+    expect(env.refreshMinutes).toBe(1);
+  });
+
+  it("CARRIER 归一到线路 key", () => {
+    expect(readEnv({ env: { CARRIER: "电信" } }).carrier).toBe("ct");
   });
 
   it("没有 env 也不炸", () => {
@@ -290,6 +364,57 @@ describe("三个尺寸产出的 DSL", () => {
     expect(collectText(tree)).toContain("CPU");
   });
 
+  it("节点行一律定高，Mac / iPad 上多出来的竖直空间才不会摊到行间距里", async () => {
+    for (const family of ["systemMedium", "systemLarge"]) {
+      const tree = await render(ctxWith({ family }), NOW);
+      const rows = collectNodeRows(tree);
+      expect(rows.length).toBeGreaterThan(0);
+      for (const row of rows) expect(row.height).toBeGreaterThan(0);
+    }
+  });
+
+  it("每行都带延迟与丢包两列", async () => {
+    const tree = await render(ctxWith({ family: "systemMedium", env: { NODES: "us-la" } }), NOW);
+    const texts = collectText(tree);
+    // us-la 电信 152ms / 丢包 1.5%
+    expect(texts).toContain("152");
+    expect(texts).toContain("2%");
+  });
+
+  it("CARRIER 决定延迟列取哪条线路", async () => {
+    const auto = collectText(
+      await render(ctxWith({ family: "systemMedium", env: { NODES: "hk-01" } }), NOW),
+    );
+    const mobile = collectText(
+      await render(
+        ctxWith({ family: "systemMedium", env: { NODES: "hk-01", CARRIER: "移动" } }),
+        NOW,
+      ),
+    );
+    expect(auto).toContain("38"); // 三网最优是电信
+    expect(mobile).toContain("74"); // 点名移动
+    expect(mobile).not.toContain("38");
+  });
+
+  it("小尺寸标出延迟来自哪条线路", async () => {
+    const tree = await render(
+      ctxWith({ family: "systemSmall", env: { NODE: "hk-01", CARRIER: "cu" } }),
+      NOW,
+    );
+    const texts = collectText(tree);
+    expect(texts).toContain("联通");
+    expect(texts).toContain("52 ms");
+  });
+
+  it("大尺寸图例说明延迟列的线路", async () => {
+    const auto = collectText(await render(ctxWith({ family: "systemLarge" }), NOW));
+    const ct = collectText(
+      await render(ctxWith({ family: "systemLarge", env: { CARRIER: "ct" } }), NOW),
+    );
+    expect(auto).toContain("｜最优 ms / 丢包");
+    expect(ct).toContain("｜电信 ms / 丢包");
+  });
+
   it("refreshAfter 按 REFRESH 分钟往后推", async () => {
     const tree = await render(ctxWith({ family: "systemSmall", env: { REFRESH: "12" } }), NOW);
     expect(tree.refreshAfter).toBe(new Date(NOW + 12 * 60_000).toISOString());
@@ -341,7 +466,7 @@ describe("错误态", () => {
 
   it("错误态也带 refreshAfter，不然小组件不会再自己醒过来", async () => {
     const tree = await render(ctxWith({ throws: true }), NOW);
-    expect(tree.refreshAfter).toBe(new Date(NOW + 5 * 60_000).toISOString());
+    expect(tree.refreshAfter).toBe(new Date(NOW + 60_000).toISOString());
   });
 });
 

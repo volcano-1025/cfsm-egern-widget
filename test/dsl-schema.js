@@ -218,18 +218,18 @@ export function collectText(node, out = []) {
  * 判据是「直接子元素里既有状态点 ● 又有进度条轨道」：大尺寸标题栏的图例也用 ●，
  * 小尺寸表头同样有状态点，只有节点行两者兼具。
  */
+export function collectNodeRows(node, out = []) {
+  if (!node || typeof node !== "object") return out;
+  const children = node.children ?? [];
+  const hasDot = children.some((c) => c.type === "text" && c.text === "●");
+  const hasBar = children.some(
+    (c) => c.type === "stack" && c.borderRadius != null && Array.isArray(c.children) && c.children.length === 2,
+  );
+  if (hasDot && hasBar) out.push(node);
+  children.forEach((child) => collectNodeRows(child, out));
+  return out;
+}
+
 export function countNodeRows(node) {
-  let count = 0;
-  const walk = (n) => {
-    if (!n || typeof n !== "object") return;
-    const children = n.children ?? [];
-    const hasDot = children.some((c) => c.type === "text" && c.text === "●");
-    const hasBar = children.some(
-      (c) => c.type === "stack" && c.borderRadius != null && Array.isArray(c.children) && c.children.length === 2,
-    );
-    if (hasDot && hasBar) count += 1;
-    children.forEach(walk);
-  };
-  walk(node);
-  return count;
+  return collectNodeRows(node).length;
 }

@@ -2,9 +2,11 @@
  * CF-Server-Monitor 探针面板的 Egern iOS 主屏小组件。
  *
  * 适配 systemSmall / systemMedium / systemLarge 三个主屏尺寸：
- *   小 —— 单台机器的 CPU / 内存 / 磁盘 / 实时网速
- *   中 —— 全站汇总条 + 若干节点行（CPU、内存、最优线路延迟）
+ *   小 —— 单台机器的 CPU / 内存 / 磁盘 / 延迟丢包 / 实时网速
+ *   中 —— 全站汇总条 + 若干节点行（CPU、内存、延迟、丢包）
  *   大 —— 标题 + 三块汇总 + 更长的节点列表（多一列磁盘）+ 离线名单
+ *
+ * 延迟看哪条线路由 CARRIER 环境变量决定（电信/联通/移动/BD），默认 auto 取三网最优。
  *
  * 只发一个请求：`GET {API_BASE}/api/servers`，它一次带回 stats 汇总与每台机器的全部指标。
  * 绝不碰 `/api/history/all` —— 逐节点查历史会让后端 D1 读行翻几十倍，面板主题同样禁止在
@@ -61,6 +63,51 @@ const LATENCY_COLORS = {
   critical: { light: "#dc2626", dark: "#f47067" },
 };
 
+/** 丢包配色。0% 不该抢眼，所以用次要文字色；有丢包才逐档升温。 */
+const LOSS_COLORS = {
+  low: { light: "#a16207", dark: "#cbd83a" },
+  mid: { light: "#b45309", dark: "#e2a928" },
+  high: { light: "#dc2626", dark: "#f47067" },
+};
+
+/**
+ * 后端固定的四条探测线路，与主题 mappers.ts 的 CARRIER_TASKS 一一对应。
+ * 探测目标和方式是后台配的，公开接口不下发，所以这里只能按线路名区分。
+ */
+const CARRIERS = {
+  ct: { label: "电信", ping: "ping_ct", loss: "loss_ct" },
+  cu: { label: "联通", ping: "ping_cu", loss: "loss_cu" },
+  cm: { label: "移动", ping: "ping_cm", loss: "loss_cm" },
+  bd: { label: "BD", ping: "ping_bd", loss: "loss_bd" },
+};
+
+/** auto 模式只在三网里选最优，不含 BD —— 与主题首页卡片的口径一致。 */
+const AUTO_CARRIERS = ["ct", "cu", "cm"];
+
+/** CARRIER 环境变量的容错写法，中英文都收。 */
+const CARRIER_ALIASES = {
+  auto: "auto",
+  best: "auto",
+  最优: "auto",
+  自动: "auto",
+  ct: "ct",
+  telecom: "ct",
+  chinatelecom: "ct",
+  电信: "ct",
+  cu: "cu",
+  unicom: "cu",
+  chinaunicom: "cu",
+  联通: "cu",
+  cm: "cm",
+  mobile: "cm",
+  cmcc: "cm",
+  chinamobile: "cm",
+  移动: "cm",
+  bd: "bd",
+  baidu: "bd",
+  百度: "bd",
+};
+
 const BYTE_UNITS = ["B", "KB", "MB", "GB", "TB", "PB"];
 
 // ---------------------------------------------------------------- 纯函数
@@ -112,23 +159,70 @@ export function latencyColor(ms) {
   return LATENCY_COLORS.critical;
 }
 
+export function lossColor(pct) {
+  if (pct == null || !Number.isFinite(pct) || pct <= 0) return COLORS.textDim;
+  if (pct < 2) return LOSS_COLORS.low;
+  if (pct < 10) return LOSS_COLORS.mid;
+  return LOSS_COLORS.high;
+}
+
+/**
+ * 丢包率文案。不足 1% 保留一位小数 —— 后端的丢包是按窗口算的百分比，
+ * 0.4% 直接四舍五入成 0% 会把「偶尔掉一个包」和「一个都没掉」混为一谈。
+ */
+export function formatLoss(pct) {
+  if (pct == null || !Number.isFinite(pct)) return "—";
+  if (pct <= 0) return "0%";
+  if (pct < 1) return `${pct.toFixed(1)}%`;
+  return `${Math.round(pct)}%`;
+}
+
+/** CARRIER 环境变量 → 线路 key 或 "auto"。认不出来的一律当 auto。 */
+export function normalizeCarrier(raw) {
+  const key = String(raw ?? "").trim().toLowerCase();
+  if (!key) return "auto";
+  return CARRIER_ALIASES[key] ?? "auto";
+}
+
 export function isOnline(server, now = Date.now()) {
   if (typeof server?.is_online === "boolean") return server.is_online;
   return now - toNumber(server?.last_updated) < ONLINE_THRESHOLD_MS;
 }
 
-/**
- * 三网（电信/联通/移动）里最优的一条延迟。
- * 负值在后端语义里表示探测失败，和 null 一样跳过；三条都没有就返回 null。
- */
-export function bestPing(server) {
-  const values = [server?.ping_ct, server?.ping_cu, server?.ping_cm]
-    .map((v) => (v == null ? null : toNumber(v)))
-    .filter((v) => v != null && v > 0);
-  return values.length ? Math.min(...values) : null;
+/** 读一条线路的延迟与丢包。延迟为负在后端语义里是探测失败，按「没有值」处理。 */
+function carrierSample(server, key) {
+  const carrier = CARRIERS[key];
+  if (!carrier) return null;
+  const pingRaw = server?.[carrier.ping];
+  const lossRaw = server?.[carrier.loss];
+  const ms = pingRaw == null ? null : toNumber(pingRaw);
+  return {
+    key,
+    label: carrier.label,
+    ms: ms != null && ms > 0 ? ms : null,
+    loss: lossRaw == null ? null : clamp(toNumber(lossRaw), 0, 100),
+  };
 }
 
-export function metricsOf(server, now = Date.now()) {
+const EMPTY_PING = { key: null, label: "", ms: null, loss: null };
+
+/**
+ * 要显示的那条线路的延迟与丢包。
+ *
+ * 指定线路时就认那一条（点名了电信却显示联通的数才是真的误导，所以不做回退）；
+ * `auto` 在三网里挑延迟最低的。三条都没有延迟值时退而取有丢包数据的那条 ——
+ * 100% 丢包恰恰表现为「有丢包、没延迟」，这时候更该把丢包显示出来。
+ */
+export function pingOf(server, carrier = "auto") {
+  if (carrier !== "auto") return carrierSample(server, carrier) ?? EMPTY_PING;
+
+  const samples = AUTO_CARRIERS.map((key) => carrierSample(server, key)).filter(Boolean);
+  const measured = samples.filter((s) => s.ms != null);
+  if (measured.length) return measured.reduce((best, s) => (s.ms < best.ms ? s : best));
+  return samples.find((s) => s.loss != null) ?? EMPTY_PING;
+}
+
+export function metricsOf(server, now = Date.now(), carrier = "auto") {
   const ramTotal = toNumber(server?.ram_total);
   const diskTotal = toNumber(server?.disk_total);
   return {
@@ -138,7 +232,7 @@ export function metricsOf(server, now = Date.now()) {
     diskPct: diskTotal > 0 ? clamp((toNumber(server?.disk_used) / diskTotal) * 100, 0, 100) : 0,
     netIn: toNumber(server?.net_in_speed),
     netOut: toNumber(server?.net_out_speed),
-    ping: bestPing(server),
+    ping: pingOf(server, carrier),
   };
 }
 
@@ -202,8 +296,9 @@ export function readEnv(ctx) {
     nodes: String(env.NODES ?? "").trim(),
     group: String(env.GROUP ?? "").trim(),
     title: String(env.TITLE ?? "").trim() || "服务器状态",
+    carrier: normalizeCarrier(env.CARRIER),
     rows: Number.isFinite(rows) && rows > 0 ? rows : null,
-    refreshMinutes: Number.isFinite(refresh) && refresh > 0 ? refresh : 5,
+    refreshMinutes: Number.isFinite(refresh) && refresh > 0 ? refresh : 1,
   };
 }
 
@@ -360,9 +455,27 @@ function relativeDate(timeMs, { size = 9, color = COLORS.textDim, align = "right
   };
 }
 
-function pingText(ms, { size = 10, width = 32 } = {}) {
-  const label = ms == null ? "—" : `${Math.round(ms)}`;
-  return cell(width, text(label, { size, color: latencyColor(ms), align: "right" }));
+/**
+ * 延迟与丢包两列。拆成两个定宽 cell 而不是一段文字，右端的数字才能对齐成一列。
+ * 没有数据时占位画「—」，宁可留白也不让后面的列往回缩。
+ */
+function pingCells(ping, { size = 10, pingWidth = 30, lossWidth = 26 } = {}) {
+  const ms = ping?.ms ?? null;
+  const loss = ping?.loss ?? null;
+  return [
+    cell(
+      pingWidth,
+      text(ms == null ? "—" : `${Math.round(ms)}`, {
+        size,
+        color: latencyColor(ms),
+        align: "right",
+      }),
+    ),
+    cell(
+      lossWidth,
+      text(formatLoss(loss), { size: size - 1, color: lossColor(loss), align: "right" }),
+    ),
+  ];
 }
 
 // ---------------------------------------------------------------- 行渲染
@@ -371,14 +484,17 @@ function pingText(ms, { size = 10, width = 32 } = {}) {
  * 中/大共用的节点行。dense=true 是中尺寸（两条进度条），false 是大尺寸（多一条磁盘）。
  * 不给每条进度条加文字标签——横向放不下，靠颜色区分（蓝=CPU 紫=内存 橙=磁盘），
  * 大尺寸的标题行有图例。
+ *
+ * 行高写死：小组件在 Mac / iPad 上比 iPhone 高不少，不定高的话 SwiftUI 会把多出来的
+ * 竖直空间平摊给每一行，节点之间被拉出巨大的空隙（tile 定了高就没这个毛病）。
  */
-function nodeRow(server, { dense = true, now = Date.now() } = {}) {
-  const m = metricsOf(server, now);
+function nodeRow(server, { dense = true, now = Date.now(), carrier = "auto" } = {}) {
+  const m = metricsOf(server, now, carrier);
   const flag = flagEmoji(server.region);
   const nameColor = m.online ? COLORS.text : COLORS.textDim;
-  const barWidth = dense ? 30 : 24;
+  const barWidth = dense ? 30 : 22;
   // 26 是「100%」在 9pt 下的实测占宽，再窄就会顶到后面的延迟列。
-  const pctWidth = 26;
+  const pctWidth = dense ? 26 : 24;
   const pctSize = 9;
 
   const children = [statusDot(m.online)];
@@ -420,14 +536,20 @@ function nodeRow(server, { dense = true, now = Date.now() } = {}) {
     );
   }
 
-  children.push(pingText(m.online ? m.ping : null, { size: dense ? 10 : 9, width: dense ? 32 : 28 }));
-  return row(children, { gap: dense ? 4 : 3 });
+  children.push(
+    ...pingCells(m.online ? m.ping : null, {
+      size: dense ? 10 : 9,
+      pingWidth: dense ? 28 : 24,
+      lossWidth: dense ? 26 : 24,
+    }),
+  );
+  return row(children, { gap: dense ? 4 : 3, height: 16 });
 }
 
 // ---------------------------------------------------------------- 三个尺寸
 
-function renderSmall(server, { now, refreshAfter, apiBase }) {
-  const m = metricsOf(server, now);
+function renderSmall(server, { now, refreshAfter, apiBase, env }) {
+  const m = metricsOf(server, now, env.carrier);
   const flag = flagEmoji(server.region);
 
   const header = [];
@@ -442,6 +564,9 @@ function renderSmall(server, { now, refreshAfter, apiBase }) {
       flex: 1,
     }),
   );
+  // 在线时更新时间挂在表头右上角：单独占一行的话，小尺寸在 iPhone SE 那档（141pt）会溢出。
+  // 离线时表头不放时间，免得和页脚的「最后上报」两个相对时间撞在一起。
+  if (m.online) header.push(relativeDate(now, { size: 9 }));
   header.push(statusDot(m.online));
 
   const metricRow = (label, pct, color) =>
@@ -451,36 +576,63 @@ function renderSmall(server, { now, refreshAfter, apiBase }) {
         bar(m.online ? pct : 0, m.online ? color : COLORS.track, { flex: 1 }),
         cell(30, text(`${Math.round(pct)}%`, { size: 10, color: COLORS.textSub, align: "right" })),
       ],
-      { gap: 5 },
+      { gap: 5, height: 13 },
     );
 
+  // auto 模式下标签是实际胜出的那条线路，顺带告诉用户这个数来自哪。
+  const pingLabel = m.ping.label || (env.carrier === "auto" ? "延迟" : "");
+  const pingRow = row(
+    [
+      cell(26, text(pingLabel, { size: 9, color: COLORS.textDim })),
+      { type: "spacer" },
+      text(m.online && m.ping.ms != null ? `${Math.round(m.ping.ms)} ms` : "—", {
+        size: 10,
+        color: latencyColor(m.online ? m.ping.ms : null),
+      }),
+      cell(
+        34,
+        text(m.online ? formatLoss(m.ping.loss) : "—", {
+          size: 9,
+          color: lossColor(m.online ? m.ping.loss : null),
+          align: "right",
+        }),
+      ),
+    ],
+    { gap: 5, height: 13 },
+  );
+
   const footer = m.online
-    ? row([
-        text(`↓ ${formatRate(m.netIn)}`, { size: 10, color: COLORS.down }),
-        { type: "spacer" },
-        text(`↑ ${formatRate(m.netOut)}`, { size: 10, color: COLORS.up }),
-      ])
-    : row([
-        text("离线", { size: 11, weight: "semibold", color: COLORS.offline }),
-        { type: "spacer" },
-        relativeDate(toNumber(server.last_updated) || now, { size: 10 }),
-      ]);
+    ? row(
+        [
+          text(`↓ ${formatRate(m.netIn)}`, { size: 10, color: COLORS.down }),
+          { type: "spacer" },
+          text(`↑ ${formatRate(m.netOut)}`, { size: 10, color: COLORS.up }),
+        ],
+        { height: 14 },
+      )
+    : row(
+        [
+          text("离线", { size: 11, weight: "semibold", color: COLORS.offline }),
+          { type: "spacer" },
+          relativeDate(toNumber(server.last_updated) || now, { size: 10 }),
+        ],
+        { height: 14 },
+      );
 
   return {
     type: "widget",
     padding: 14,
-    gap: 6,
+    gap: 5,
     url: `${apiBase}/#/server/${encodeURIComponent(String(server.id))}`,
     refreshAfter,
     children: [
-      row(header, { gap: 4 }),
+      row(header, { gap: 4, height: 17 }),
       metricRow("CPU", m.cpuPct, COLORS.cpu),
       metricRow("内存", m.ramPct, COLORS.mem),
       metricRow("磁盘", m.diskPct, COLORS.disk),
+      pingRow,
       { type: "spacer" },
       footer,
-      // 在线时才在末行标更新时间；离线时时间已经在 footer 里了。
-      ...(m.online ? [row([{ type: "spacer" }, relativeDate(now)])] : []),
     ],
   };
 }
@@ -497,7 +649,7 @@ function summaryLine(stats, now) {
   children.push(text(`↓ ${formatRate(stats.globalSpeedIn)}`, { size: 10, color: COLORS.down }));
   children.push(text(`↑ ${formatRate(stats.globalSpeedOut)}`, { size: 10, color: COLORS.up }));
   children.push(relativeDate(now, { size: 9 }));
-  return row(children, { gap: 6 });
+  return row(children, { gap: 6, height: 16 });
 }
 
 function renderMedium(servers, stats, { now, refreshAfter, apiBase, env }) {
@@ -512,13 +664,14 @@ function renderMedium(servers, stats, { now, refreshAfter, apiBase, env }) {
   return {
     type: "widget",
     padding: 12,
-    gap: 5,
+    // 行定高之后不能再靠压缩来兜底，gap 留 4 才够 iPhone SE 那档（中尺寸只有 141pt 高）。
+    gap: 4,
     url: `${apiBase}/#/`,
     refreshAfter,
     children: [
       summaryLine(stats, now),
       divider(),
-      ...list.map((server) => nodeRow(server, { dense: true, now })),
+      ...list.map((server) => nodeRow(server, { dense: true, now, carrier: env.carrier })),
       { type: "spacer" },
     ],
   };
@@ -532,7 +685,7 @@ function tile(children) {
     alignItems: "start",
     gap: 1,
     flex: 1,
-    height: 56,
+    height: 52,
     padding: 7,
     borderRadius: 10,
     backgroundColor: COLORS.fill,
@@ -540,7 +693,9 @@ function tile(children) {
   };
 }
 
-function legend() {
+/** 进度条只有颜色没有文字标签，靠这行图例说明；末尾顺带标明延迟列取的是哪条线路。 */
+function legend(carrier) {
+  const latencyLabel = carrier === "auto" ? "最优" : (CARRIERS[carrier]?.label ?? "最优");
   return row(
     [
       text("●", { size: 7, color: COLORS.cpu }),
@@ -549,6 +704,7 @@ function legend() {
       text("内存", { size: 8, color: COLORS.textDim }),
       text("●", { size: 7, color: COLORS.disk }),
       text("磁盘", { size: 8, color: COLORS.textDim }),
+      text(`｜${latencyLabel} ms / 丢包`, { size: 8, color: COLORS.textDim }),
     ],
     { gap: 2 },
   );
@@ -574,16 +730,19 @@ function renderLarge(servers, stats, { now, refreshAfter, apiBase, env }) {
   return {
     type: "widget",
     padding: 14,
-    gap: 7,
+    gap: 6,
     url: `${apiBase}/#/`,
     refreshAfter,
     children: [
-      row([
-        text(env.title, { size: 15, weight: "semibold", maxLines: 1, minScale: 0.7 }),
-        { type: "spacer" },
-        legend(),
-        relativeDate(now),
-      ], { gap: 6 }),
+      row(
+        [
+          text(env.title, { size: 15, weight: "semibold", maxLines: 1, minScale: 0.7 }),
+          { type: "spacer" },
+          legend(env.carrier),
+          relativeDate(now),
+        ],
+        { gap: 6, height: 18 },
+      ),
       row(
         [
           tile([
@@ -608,7 +767,7 @@ function renderLarge(servers, stats, { now, refreshAfter, apiBase, env }) {
         { gap: 7, align: "start" },
       ),
       divider(),
-      ...list.map((server) => nodeRow(server, { dense: false, now })),
+      ...list.map((server) => nodeRow(server, { dense: false, now, carrier: env.carrier })),
       { type: "spacer" },
       divider(),
       row([
@@ -621,7 +780,7 @@ function renderLarge(servers, stats, { now, refreshAfter, apiBase, env }) {
               flex: 1,
             })
           : text("全部在线", { size: 9, color: COLORS.online, flex: 1 }),
-      ]),
+      ], { height: 12 }),
     ],
   };
 }
@@ -698,4 +857,4 @@ export default async function (ctx) {
 }
 
 // 测试用的内部件，Egern 不会读到。
-export { COLORS, WidgetError, bar, nodeRow, renderError };
+export { CARRIERS, COLORS, WidgetError, bar, nodeRow, renderError };
