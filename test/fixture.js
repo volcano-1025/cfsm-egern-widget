@@ -11,6 +11,8 @@
  * - 两个 server_group
  * - 0% 与 100% 两个极端百分比
  * - 长名字（用来验证名称列的截断与缩放）
+ * - `sort_order` 与「健康度」顺序刻意不一致：后台顺序是 HK→JP→US→SG→DE→RU→KR→UK→CA，
+ *   而按健康度排离线的 DE-FRA / RU-MOW 会跑到最前，两种排序能明显区分开
  */
 
 const MINUTE = 60_000;
@@ -60,6 +62,7 @@ function server(overrides) {
 export const SERVERS = [
   server({
     id: "hk-01",
+    sort_order: 10,
     name: "HK-01",
     region: "HK",
     server_group: "亚洲",
@@ -81,6 +84,7 @@ export const SERVERS = [
   }),
   server({
     id: "jp-tokyo",
+    sort_order: 20,
     // 故意长名，检验名称列的 maxLines/minScale 是否够用
     name: "JP-Tokyo-BandwagonHost-KVM",
     region: "JP",
@@ -97,6 +101,7 @@ export const SERVERS = [
   }),
   server({
     id: "us-la",
+    sort_order: 30,
     name: "US-LA",
     region: "US",
     server_group: "美洲",
@@ -118,6 +123,7 @@ export const SERVERS = [
   }),
   server({
     id: "sg-01",
+    sort_order: 40,
     name: "SG-01",
     region: "SG",
     server_group: "亚洲",
@@ -134,6 +140,7 @@ export const SERVERS = [
   }),
   server({
     id: "de-fra",
+    sort_order: 50,
     name: "DE-FRA",
     region: "DE",
     server_group: "欧洲",
@@ -146,6 +153,7 @@ export const SERVERS = [
   }),
   server({
     id: "ru-mow",
+    sort_order: 60,
     name: "RU-MOW",
     region: "RU",
     server_group: "欧洲",
@@ -157,6 +165,7 @@ export const SERVERS = [
   }),
   server({
     id: "kr-icn",
+    sort_order: 70,
     name: "KR-ICN",
     region: "KR",
     server_group: "亚洲",
@@ -170,6 +179,7 @@ export const SERVERS = [
   }),
   server({
     id: "uk-lon",
+    sort_order: 80,
     name: "UK-LON",
     region: "GB",
     server_group: "欧洲",
@@ -181,6 +191,7 @@ export const SERVERS = [
   }),
   server({
     id: "ca-tor",
+    sort_order: 90,
     name: "CA-TOR",
     region: "CA",
     server_group: "美洲",
@@ -192,6 +203,7 @@ export const SERVERS = [
   }),
   server({
     id: "hidden-01",
+    sort_order: 100,
     name: "内部机",
     region: "TW",
     server_group: "亚洲",

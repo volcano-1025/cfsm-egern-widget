@@ -75,9 +75,27 @@ function stretches(node) {
   return children.some((child) => child.type === "spacer" || child.flex != null);
 }
 
+/**
+ * 渐变 → CSS。只实现了脚本用到的 linear。
+ * 角度换算：DSL 用 {x,y} 起止点（y 轴向下），CSS 用「0deg 朝上、90deg 朝右」的角度。
+ */
+function gradientCss(gradient, scheme) {
+  if (!gradient || (gradient.type ?? "linear") !== "linear") return null;
+  const from = gradient.startPoint ?? { x: 0, y: 0 };
+  const to = gradient.endPoint ?? { x: 1, y: 1 };
+  const angle = 180 - (Math.atan2(to.x - from.x, to.y - from.y) * 180) / Math.PI;
+  const stops = (gradient.colors ?? []).map((c, i) => {
+    const position = gradient.stops?.[i];
+    return `${color(c, scheme)}${position != null ? ` ${position * 100}%` : ""}`;
+  });
+  return stops.length ? `linear-gradient(${angle.toFixed(1)}deg, ${stops.join(", ")})` : null;
+}
+
 function styleOf(node, scheme, parentDirection) {
   const s = [];
-  const bg = color(node.backgroundColor, scheme);
+  // 与真机一致：渐变优先级高于纯色。
+  const gradient = gradientCss(node.backgroundGradient, scheme);
+  const bg = gradient ?? color(node.backgroundColor, scheme);
   if (bg) s.push(`background:${bg}`);
   if (node.borderRadius != null) {
     s.push(`border-radius:${node.borderRadius === "auto" ? 999 : node.borderRadius}px`);
@@ -214,7 +232,22 @@ const PAGES = {
     ],
   ],
   medium: [
-    ["中 · 自动排序", "systemMedium", makeCtx({ family: "systemMedium" })],
+    ["中 · 后台顺序（默认）", "systemMedium", makeCtx({ family: "systemMedium" })],
+    [
+      "中 · 按健康度",
+      "systemMedium",
+      makeCtx({ family: "systemMedium", env: { SORT: "health" } }),
+    ],
+    [
+      "中 · 背景 system",
+      "systemMedium",
+      makeCtx({ family: "systemMedium", env: { BACKGROUND: "system" } }),
+    ],
+    [
+      "中 · 背景 solid",
+      "systemMedium",
+      makeCtx({ family: "systemMedium", env: { BACKGROUND: "solid" } }),
+    ],
     [
       "中 · 只有 3 台",
       "systemMedium",
@@ -297,7 +330,13 @@ function page(title, cards) {
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><title>${esc(title)}</title>
 <style>
-  body { margin:0; padding:20px; background:#8a8f98;
+  /* 画一张假壁纸：小组件材质是半透明的，底下没有花纹就看不出玻璃感。 */
+  body { margin:0; padding:20px;
+         background:
+           radial-gradient(60% 50% at 20% 15%, #7b6cf6 0%, transparent 60%),
+           radial-gradient(50% 45% at 85% 30%, #f0806c 0%, transparent 60%),
+           radial-gradient(70% 60% at 50% 95%, #2f8f7f 0%, transparent 65%),
+           #4a4f5c;
          font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif; }
   /* 浅深色并排一行，一屏内看完对比。 */
   .grid { display:flex; flex-wrap:wrap; gap:16px; align-items:flex-start; }
@@ -309,8 +348,10 @@ function page(title, cards) {
             box-sizing:border-box; }
   /* 根节点必须撑满整块，否则 spacer 没有剩余空间可占，底部内容不会被顶到底。 */
   .widget > div { width:100%; height:100%; }
-  .widget.light { background:#fdfdfd; }
-  .widget.dark  { background:#1c2027; }
+  /* 系统给的小组件材质：真机上是壁纸的重度模糊，这里用半透明底色近似，
+     好让脚本自己铺的那层玻璃色有东西可以压。 */
+  .widget.light { background:rgba(252,252,253,0.78); backdrop-filter:blur(30px); }
+  .widget.dark  { background:rgba(28,32,39,0.72);  backdrop-filter:blur(30px); }
   .widget * { box-sizing:border-box; }
 </style></head>
 <body><div class="grid">${cards.join("")}</div></body></html>

@@ -147,6 +147,10 @@ export function validateTree(node, path = "root") {
     if (node[key] != null) problems.push(...validateColor(node[key], `${path}.${key}`));
   }
 
+  if (node.backgroundGradient != null) {
+    problems.push(...validateGradient(node.backgroundGradient, `${path}.backgroundGradient`));
+  }
+
   if (node.direction != null && !DIRECTIONS.includes(node.direction)) {
     problems.push(`${path}.direction: 非法值 ${JSON.stringify(node.direction)}`);
   }
@@ -181,6 +185,46 @@ export function validateTree(node, path = "root") {
     }
   }
 
+  return problems;
+}
+
+export const GRADIENT_PROPS = [
+  "type",
+  "colors",
+  "stops",
+  "startPoint",
+  "endPoint",
+  "center",
+  "startRadius",
+  "endRadius",
+  "startAngle",
+  "endAngle",
+];
+export const GRADIENT_TYPES = ["linear", "radial", "angular"];
+
+function validateGradient(value, path) {
+  if (!value || typeof value !== "object") return [`${path}: 渐变必须是对象`];
+  const problems = [];
+  for (const key of Object.keys(value)) {
+    if (!GRADIENT_PROPS.includes(key)) problems.push(`${path}: 多余属性 ${key}`);
+  }
+  if (value.type != null && !GRADIENT_TYPES.includes(value.type)) {
+    problems.push(`${path}.type: 非法值 ${JSON.stringify(value.type)}`);
+  }
+  if (!Array.isArray(value.colors) || value.colors.length === 0) {
+    problems.push(`${path}.colors: 必须是非空数组`);
+  } else {
+    value.colors.forEach((color, i) => {
+      problems.push(...validateColor(color, `${path}.colors[${i}]`));
+    });
+  }
+  for (const key of ["startPoint", "endPoint", "center"]) {
+    const point = value[key];
+    if (point == null) continue;
+    if (typeof point !== "object" || typeof point.x !== "number" || typeof point.y !== "number") {
+      problems.push(`${path}.${key}: 必须是 {x, y}`);
+    }
+  }
   return problems;
 }
 

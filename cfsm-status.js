@@ -115,6 +115,26 @@ const CARRIER_ALIASES = {
   百度: "bd",
 };
 
+/**
+ * 毛玻璃背景。
+ *
+ * DSL 没有模糊原语 —— 真正的毛玻璃是系统给的：小组件本来就浮在一层材质上。
+ * 这里做的是在那层材质之上压一层半透明灰，让它呈现出原生电池、天气那类小组件的质感。
+ * 上深下浅的线性渐变比平涂更像玻璃：光从上方来。
+ */
+const GLASS_GRADIENT = {
+  type: "linear",
+  startPoint: { x: 0, y: 0 },
+  endPoint: { x: 0, y: 1 },
+  colors: [
+    { light: "rgba(142, 144, 152, 0.34)", dark: "rgba(118, 130, 146, 0.30)" },
+    { light: "rgba(142, 144, 152, 0.18)", dark: "rgba(118, 130, 146, 0.14)" },
+  ],
+};
+
+/** 不透明背景，取主题 tokens.css 的 --surface。 */
+const SOLID_BACKGROUND = { light: "#ffffff", dark: "#22272e" };
+
 const BYTE_UNITS = ["B", "KB", "MB", "GB", "TB", "PB"];
 
 // ---------------------------------------------------------------- 纯函数
@@ -213,6 +233,20 @@ export function formatLoss(pct) {
   return `${Math.round(pct)}%`;
 }
 
+/** SORT 环境变量 → 排序方式。认不出来的一律当 order（跟随后台）。 */
+export function normalizeSort(raw) {
+  const key = String(raw ?? "").trim().toLowerCase();
+  return /^(health|负载|健康)$/.test(key) ? "health" : "order";
+}
+
+/** BACKGROUND 环境变量 → 背景样式。认不出来的一律当 glass。 */
+export function normalizeBackground(raw) {
+  const key = String(raw ?? "").trim().toLowerCase();
+  if (/^(system|none|默认|系统)$/.test(key)) return "system";
+  if (/^(solid|不透明|纯色)$/.test(key)) return "solid";
+  return "glass";
+}
+
 /** CARRIER 环境变量 → 线路 key 或 "auto"。认不出来的一律当 auto。 */
 export function normalizeCarrier(raw) {
   const key = String(raw ?? "").trim().toLowerCase();
@@ -292,7 +326,10 @@ export function pickOne(servers, token) {
  * 整个小组件变成错误页）；没给就按「最需要关注」排序：离线优先，其次 CPU 高，
  * 最后按名称兜底保证顺序稳定。
  */
-export function pickList(servers, { nodes = "", group = "", limit = 4, now = Date.now() } = {}) {
+export function pickList(
+  servers,
+  { nodes = "", group = "", limit = 4, now = Date.now(), sort = "order" } = {},
+) {
   let pool = servers.filter((s) => String(s.is_hidden ?? "0") !== "1");
   if (group) pool = pool.filter((s) => String(s.server_group ?? "") === group);
 
@@ -310,16 +347,25 @@ export function pickList(servers, { nodes = "", group = "", limit = 4, now = Dat
     return picked.slice(0, limit);
   }
 
-  return [...pool]
-    .sort((a, b) => {
-      const onlineA = isOnline(a, now);
-      const onlineB = isOnline(b, now);
+  // 下标兜底保证排序稳定：sort_order 全是 0 的站点（后台没排过序）就保持后端下发的顺序。
+  const indexed = pool.map((server, index) => ({ server, index }));
+  indexed.sort((a, b) => {
+    if (sort === "health") {
+      const onlineA = isOnline(a.server, now);
+      const onlineB = isOnline(b.server, now);
       if (onlineA !== onlineB) return onlineA ? 1 : -1;
-      const cpuDiff = toNumber(b.cpu) - toNumber(a.cpu);
+      const cpuDiff = toNumber(b.server.cpu) - toNumber(a.server.cpu);
       if (cpuDiff !== 0) return cpuDiff;
-      return String(a.name ?? "").localeCompare(String(b.name ?? ""));
-    })
-    .slice(0, limit);
+      const nameDiff = String(a.server.name ?? "").localeCompare(String(b.server.name ?? ""));
+      if (nameDiff !== 0) return nameDiff;
+    } else {
+      const orderDiff = toNumber(a.server.sort_order) - toNumber(b.server.sort_order);
+      if (orderDiff !== 0) return orderDiff;
+    }
+    return a.index - b.index;
+  });
+
+  return indexed.slice(0, limit).map((entry) => entry.server);
 }
 
 export function readEnv(ctx) {
@@ -333,6 +379,8 @@ export function readEnv(ctx) {
     group: String(env.GROUP ?? "").trim(),
     title: String(env.TITLE ?? "").trim() || "服务器状态",
     carrier: normalizeCarrier(env.CARRIER),
+    sort: normalizeSort(env.SORT),
+    background: normalizeBackground(env.BACKGROUND),
     debug: /^(1|true|yes|on)$/i.test(String(env.DEBUG ?? "").trim()),
     rows: Number.isFinite(rows) && rows > 0 ? rows : null,
     refreshMinutes: Number.isFinite(refresh) && refresh > 0 ? refresh : 1,
@@ -474,6 +522,16 @@ function divider() {
     backgroundColor: COLORS.hairline,
     children: [{ type: "spacer" }],
   };
+}
+
+/**
+ * 背景样式铺到 widget 根节点上。
+ * `system` 什么都不设 —— 交给系统自己的小组件材质，那才是最「原生」的一档。
+ */
+function backgroundOf(style) {
+  if (style === "solid") return { backgroundColor: SOLID_BACKGROUND };
+  if (style === "glass") return { backgroundGradient: GLASS_GRADIENT };
+  return {};
 }
 
 function statusDot(online) {
@@ -689,6 +747,7 @@ function renderSmall(server, { now, refreshAfter, apiBase, env }) {
     type: "widget",
     padding: 14,
     gap: 5,
+    ...backgroundOf(env.background),
     url: `${apiBase}/#/server/${encodeURIComponent(String(server.id))}`,
     refreshAfter,
     children: [
@@ -724,6 +783,7 @@ function renderMedium(servers, stats, { now, refreshAfter, apiBase, env }) {
     nodes: env.nodes,
     group: env.group,
     limit: env.rows ?? LIST_LAYOUT.medium.capacity,
+    sort: env.sort,
     now,
   });
   const height = listRowHeight(list.length, LIST_LAYOUT.medium);
@@ -733,6 +793,7 @@ function renderMedium(servers, stats, { now, refreshAfter, apiBase, env }) {
     padding: 12,
     // 行定高之后不能再靠压缩来兜底，gap 留 4 才够 iPhone SE 那档（中尺寸只有 141pt 高）。
     gap: LIST_LAYOUT.medium.gap,
+    ...backgroundOf(env.background),
     url: `${apiBase}/#/`,
     refreshAfter,
     children: [
@@ -788,6 +849,7 @@ function renderLarge(servers, stats, { now, refreshAfter, apiBase, env }) {
     nodes: env.nodes,
     group: env.group,
     limit: env.rows ?? LIST_LAYOUT.large.capacity,
+    sort: env.sort,
     now,
   });
   const height = listRowHeight(list.length, LIST_LAYOUT.large);
@@ -805,6 +867,7 @@ function renderLarge(servers, stats, { now, refreshAfter, apiBase, env }) {
     type: "widget",
     padding: 14,
     gap: LIST_LAYOUT.large.gap,
+    ...backgroundOf(env.background),
     url: `${apiBase}/#/`,
     refreshAfter,
     children: [
@@ -884,7 +947,7 @@ function renderDebug(ctx, env, servers, stats, refreshAfter) {
   };
 }
 
-function renderError(message, { refreshAfter, hint } = {}) {
+function renderError(message, { refreshAfter, hint, background = "glass" } = {}) {
   const children = [
     { type: "spacer" },
     row([
@@ -906,7 +969,14 @@ function renderError(message, { refreshAfter, hint } = {}) {
     );
   }
   children.push({ type: "spacer" });
-  return { type: "widget", padding: 14, gap: 4, refreshAfter, children };
+  return {
+    type: "widget",
+    padding: 14,
+    gap: 4,
+    ...backgroundOf(background),
+    refreshAfter,
+    children,
+  };
 }
 
 // ---------------------------------------------------------------- 入口
@@ -918,6 +988,7 @@ export async function render(ctx, now = Date.now()) {
   if (!env.apiBase) {
     return renderError("未配置 API_BASE", {
       refreshAfter,
+      background: env.background,
       hint: "在 Egern 的 widget env 里填后端地址，例如 https://status.example.com",
     });
   }
@@ -927,7 +998,7 @@ export async function render(ctx, now = Date.now()) {
     snapshot = await fetchSnapshot(ctx, env.apiBase);
   } catch (error) {
     const message = error instanceof WidgetError ? error.message : "取数失败";
-    return renderError(message, { refreshAfter });
+    return renderError(message, { refreshAfter, background: env.background });
   }
 
   const { servers } = snapshot;
@@ -946,9 +1017,12 @@ export async function render(ctx, now = Date.now()) {
   const visible = servers.filter((s) => String(s.is_hidden ?? "0") !== "1");
   const target = env.node
     ? pickOne(visible, env.node)
-    : pickList(visible, { group: env.group, limit: 1, now })[0];
+    : pickList(visible, { group: env.group, limit: 1, sort: env.sort, now })[0];
   if (!target) {
-    return renderError(`未找到节点\n${env.node}`, { refreshAfter });
+    return renderError(`未找到节点\n${env.node}`, {
+      refreshAfter,
+      background: env.background,
+    });
   }
   return renderSmall(target, options);
 }

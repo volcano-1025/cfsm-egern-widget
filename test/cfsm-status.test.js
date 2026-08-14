@@ -240,8 +240,22 @@ describe("pickList", () => {
     expect(list.map((s) => s.id)).not.toContain("hidden-01");
   });
 
-  it("离线优先，其次 CPU 降序", () => {
+  it("默认跟随后台的 sort_order", () => {
     const list = pickList(SERVERS, { limit: 4, now: NOW });
+    expect(list.map((s) => s.id)).toEqual(["hk-01", "jp-tokyo", "us-la", "sg-01"]);
+  });
+
+  it("sort_order 全相同时保持后端下发的顺序", () => {
+    const flat = SERVERS.slice(0, 3).map((s) => ({ ...s, sort_order: 0 }));
+    expect(pickList(flat, { limit: 9, now: NOW }).map((s) => s.id)).toEqual([
+      "hk-01",
+      "jp-tokyo",
+      "us-la",
+    ]);
+  });
+
+  it("sort=health 时离线优先，其次 CPU 降序", () => {
+    const list = pickList(SERVERS, { limit: 4, now: NOW, sort: "health" });
     expect(list.map((s) => s.id)).toEqual(["de-fra", "ru-mow", "us-la", "kr-icn"]);
   });
 
@@ -316,6 +330,19 @@ describe("readEnv", () => {
     expect(readEnv({ env: { CARRIER: "电信" } }).carrier).toBe("ct");
   });
 
+  it("SORT 默认跟随后台，只认 health 一个反向值", () => {
+    expect(readEnv({ env: {} }).sort).toBe("order");
+    expect(readEnv({ env: { SORT: "health" } }).sort).toBe("health");
+    expect(readEnv({ env: { SORT: "乱写" } }).sort).toBe("order");
+  });
+
+  it("BACKGROUND 默认毛玻璃", () => {
+    expect(readEnv({ env: {} }).background).toBe("glass");
+    expect(readEnv({ env: { BACKGROUND: "system" } }).background).toBe("system");
+    expect(readEnv({ env: { BACKGROUND: "solid" } }).background).toBe("solid");
+    expect(readEnv({ env: { BACKGROUND: "乱写" } }).background).toBe("glass");
+  });
+
   it("没有 env 也不炸", () => {
     expect(readEnv({}).apiBase).toBe("");
     expect(readEnv(undefined).apiBase).toBe("");
@@ -337,9 +364,15 @@ describe("三个尺寸产出的 DSL", () => {
     expect(tree.url).toBe(`${API_BASE}/#/server/jp-tokyo`);
   });
 
-  it("小尺寸没指定 NODE 时取最需要关注的那台", async () => {
-    const tree = await render(ctxWith({ family: "systemSmall" }), NOW);
-    expect(collectText(tree)).toContain("DE-FRA");
+  it("小尺寸没指定 NODE 时取排序里的第一台，与列表口径一致", async () => {
+    const byOrder = await render(ctxWith({ family: "systemSmall" }), NOW);
+    expect(collectText(byOrder)).toContain("HK-01");
+
+    const byHealth = await render(
+      ctxWith({ family: "systemSmall", env: { SORT: "health" } }),
+      NOW,
+    );
+    expect(collectText(byHealth)).toContain("DE-FRA");
   });
 
   it("中尺寸默认 5 行，大尺寸默认 9 行", async () => {
@@ -419,6 +452,34 @@ describe("三个尺寸产出的 DSL", () => {
     expect(texts).not.toContain("在线 / 总数");
     expect(texts).not.toContain("实时");
     expect(texts).not.toContain("累计");
+  });
+
+  it("BACKGROUND 决定根节点铺什么背景", async () => {
+    for (const family of ["systemSmall", "systemMedium", "systemLarge"]) {
+      const glass = await render(ctxWith({ family, env: { NODE: "hk-01" } }), NOW);
+      expect(validateTree(glass)).toEqual([]);
+      expect(glass.backgroundGradient?.type).toBe("linear");
+      expect(glass.backgroundColor).toBeUndefined();
+
+      const system = await render(
+        ctxWith({ family, env: { NODE: "hk-01", BACKGROUND: "system" } }),
+        NOW,
+      );
+      expect(system.backgroundGradient).toBeUndefined();
+      expect(system.backgroundColor).toBeUndefined();
+
+      const solid = await render(
+        ctxWith({ family, env: { NODE: "hk-01", BACKGROUND: "solid" } }),
+        NOW,
+      );
+      expect(validateTree(solid)).toEqual([]);
+      expect(solid.backgroundColor).toEqual({ light: "#ffffff", dark: "#22272e" });
+    }
+  });
+
+  it("错误态也铺同一套背景", async () => {
+    const tree = await render(ctxWith({ throws: true, env: { BACKGROUND: "solid" } }), NOW);
+    expect(tree.backgroundColor).toEqual({ light: "#ffffff", dark: "#22272e" });
   });
 
   it("进度条轨道一律定宽", async () => {
