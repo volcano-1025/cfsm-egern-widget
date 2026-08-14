@@ -75,8 +75,13 @@ describe("latencyColor", () => {
     expect(latencyColor(-1).dark).toBe("#9198a1");
   });
 
-  it("浅色档位比深色深，保证白底可读", () => {
-    expect(latencyColor(50).light).not.toBe(latencyColor(50).dark);
+  it("色值与主题 tokens.css 的 --latency-* 逐一对上", () => {
+    expect(latencyColor(50)).toEqual({ light: "#2fc66e", dark: "#2fc66e" });
+    expect(latencyColor(80)).toEqual({ light: "#9fe339", dark: "#9fe339" });
+    expect(latencyColor(140)).toEqual({ light: "#cbd83a", dark: "#cbd83a" });
+    expect(latencyColor(180)).toEqual({ light: "#e2a928", dark: "#e2a928" });
+    // 只有 critical 一档主题本身就分浅深色
+    expect(latencyColor(300)).toEqual({ light: "#dc2626", dark: "#f47067" });
   });
 });
 
@@ -382,6 +387,40 @@ describe("三个尺寸产出的 DSL", () => {
     }
   });
 
+  it("节点少时把行拉高填空档，排满时回到最小行高", async () => {
+    const heights = async (family, ids) =>
+      collectNodeRows(
+        await render(ctxWith({ family, env: ids ? { NODES: ids } : {} }), NOW),
+      ).map((r) => r.height);
+
+    // 排满：中 5 行 / 大 9 行，都用最小行高
+    expect(await heights("systemMedium")).toEqual([16, 16, 16, 16, 16]);
+    expect(await heights("systemLarge")).toEqual(Array(9).fill(16));
+
+    // 只有 4 台：行被拉高，但不会无上限地摊满
+    const mediumFew = await heights("systemMedium", "hk-01,us-la,sg-01,kr-icn");
+    const largeFew = await heights("systemLarge", "hk-01,us-la,sg-01,kr-icn");
+    expect(mediumFew).toEqual([21, 21, 21, 21]);
+    expect(largeFew).toEqual([28, 28, 28, 28]);
+  });
+
+  it("大尺寸的汇总方块那一行必须定高，否则它会吃掉整块的竖直空档", async () => {
+    const tree = await render(ctxWith({ family: "systemLarge" }), NOW);
+    const tileRow = tree.children.find((child) =>
+      (child.children ?? []).some((c) => c.type === "stack" && c.borderRadius === 10),
+    );
+    expect(tileRow).toBeDefined();
+    expect(tileRow.height).toBeGreaterThan(0);
+  });
+
+  it("大尺寸汇总方块只留数字，不带说明小字", async () => {
+    const texts = collectText(await render(ctxWith({ family: "systemLarge" }), NOW));
+    expect(texts).toContain("8/10");
+    expect(texts).not.toContain("在线 / 总数");
+    expect(texts).not.toContain("实时");
+    expect(texts).not.toContain("累计");
+  });
+
   it("进度条轨道一律定宽", async () => {
     // 真机上小尺寸曾整片空白、只剩一个旗帜，唯一不与中/大尺寸共享的结构就是
     // 「只有 flex、没有 width 的轨道」。三个尺寸都不许再出现这种轨道。
@@ -444,8 +483,17 @@ describe("三个尺寸产出的 DSL", () => {
     const ct = collectText(
       await render(ctxWith({ family: "systemLarge", env: { CARRIER: "ct" } }), NOW),
     );
-    expect(auto).toContain("｜最优 ms / 丢包");
-    expect(ct).toContain("｜电信 ms / 丢包");
+    expect(auto).toContain("｜最优");
+    expect(ct).toContain("｜电信");
+  });
+
+  it("DEBUG=1 产出只有 widget + 一个 text 的最小树", async () => {
+    const tree = await render(ctxWith({ family: "systemSmall", env: { DEBUG: "1" } }), NOW);
+    expect(validateTree(tree)).toEqual([]);
+    expect(tree.children).toHaveLength(1);
+    expect(tree.children[0].type).toBe("text");
+    expect(tree.children[0].text).toContain("family: systemSmall");
+    expect(tree.children[0].text).toContain("nodes: 10");
   });
 
   it("refreshAfter 按 REFRESH 分钟往后推", async () => {

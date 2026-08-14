@@ -49,17 +49,14 @@ const COLORS = {
 };
 
 /**
- * 延迟阶梯配色，档位与阈值抄自主题的 latencyHeatColor。
- *
- * 深色沿用主题原值；浅色整体压深了一档 —— 主题里这些颜色画在深色卡片或色带上，
- * 而小组件浅色态是接近纯白的系统材质，原来的黄绿（#9fe339 / #cbd83a）在白底上几乎看不清。
- * 色相顺序仍是 绿 → 黄绿 → 金 → 橙 → 红，只是明度降下来。
+ * 延迟阶梯配色，档位、阈值与色值逐一抄自主题 tokens.css 的 --latency-* 与
+ * metricTone.ts 的 latencyHeatColor。浅深色只有 critical 一档不同，其余两套值相同。
  */
 const LATENCY_COLORS = {
-  excellent: { light: "#15803d", dark: "#2fc66e" },
-  good: { light: "#4d7c0f", dark: "#9fe339" },
-  moderate: { light: "#a16207", dark: "#cbd83a" },
-  elevated: { light: "#b45309", dark: "#e2a928" },
+  excellent: { light: "#2fc66e", dark: "#2fc66e" },
+  good: { light: "#9fe339", dark: "#9fe339" },
+  moderate: { light: "#cbd83a", dark: "#cbd83a" },
+  elevated: { light: "#e2a928", dark: "#e2a928" },
   critical: { light: "#dc2626", dark: "#f47067" },
 };
 
@@ -336,6 +333,7 @@ export function readEnv(ctx) {
     group: String(env.GROUP ?? "").trim(),
     title: String(env.TITLE ?? "").trim() || "服务器状态",
     carrier: normalizeCarrier(env.CARRIER),
+    debug: /^(1|true|yes|on)$/i.test(String(env.DEBUG ?? "").trim()),
     rows: Number.isFinite(rows) && rows > 0 ? rows : null,
     refreshMinutes: Number.isFinite(refresh) && refresh > 0 ? refresh : 1,
   };
@@ -527,7 +525,27 @@ function pingCells(ping, { size = 10, pingWidth = 30, lossWidth = 26 } = {}) {
  * 行高写死：小组件在 Mac / iPad 上比 iPhone 高不少，不定高的话 SwiftUI 会把多出来的
  * 竖直空间平摊给每一行，节点之间被拉出巨大的空隙（tile 定了高就没这个毛病）。
  */
-function nodeRow(server, { dense = true, now = Date.now(), carrier = "auto" } = {}) {
+/** 中/大尺寸在参考机型上排满时的行数与行距，listRowHeight 以此为预算。 */
+const LIST_LAYOUT = {
+  medium: { capacity: 5, base: 16, gap: 4, max: 26 },
+  large: { capacity: 9, base: 16, gap: 6, max: 28 },
+};
+
+/**
+ * 行高。
+ *
+ * 行必须定高（不定高的话 Egern 会把 Mac / iPad 上多出来的竖直空间平摊掉，行间被扯出巨大空隙），
+ * 但一律用最小行高又会让「只有四台机器」的面板挤在顶上、下面空一大片。
+ * 所以按机器台数把行拉高来填空档，并设上限 —— 无上限地填满，四台机器就会被扯成一屏大格子，
+ * 那正是最初 Mac 上看着不对的样子。
+ */
+export function listRowHeight(count, { capacity, base, gap, max }) {
+  if (!count || count >= capacity) return base;
+  const budget = capacity * base + (capacity - 1) * gap;
+  return clamp(Math.floor((budget - (count - 1) * gap) / count), base, max);
+}
+
+function nodeRow(server, { dense = true, now = Date.now(), carrier = "auto", height = 16 } = {}) {
   const m = metricsOf(server, now, carrier);
   const flag = flagEmoji(server.region);
   const nameColor = m.online ? COLORS.text : COLORS.textDim;
@@ -582,17 +600,26 @@ function nodeRow(server, { dense = true, now = Date.now(), carrier = "auto" } = 
       lossWidth: dense ? 26 : 24,
     }),
   );
-  return row(children, { gap: dense ? 4 : 3, height: 16 });
+  return row(children, { gap: dense ? 4 : 3, height });
 }
 
 // ---------------------------------------------------------------- 三个尺寸
 
+/**
+ * 小尺寸：单台机器。
+ *
+ * 每一行都刻意做成和 nodeRow 一样的形状 ——「一个 flex 文本 + 若干定宽块」，
+ * 表头的 date 也和中/大尺寸一样放在行尾。原因是小尺寸在真机上曾经整块空白、只剩一个旗帜，
+ * 而中/大尺寸用同一批积木渲染始终正常，所以这里不再使用任何它们没有的结构：
+ * 没有行内 spacer、没有以定宽块开头的行、没有只有 flex 没有 width 的进度条轨道。
+ * 改这里之前先想清楚新结构在中/大尺寸里有没有先例。
+ */
 function renderSmall(server, { now, refreshAfter, apiBase, env }) {
   const m = metricsOf(server, now, env.carrier);
   const flag = flagEmoji(server.region);
 
-  const header = [];
-  if (flag) header.push(text(flag, { size: 13 }));
+  const header = [statusDot(m.online)];
+  if (flag) header.push(text(flag, { size: 12 }));
   header.push(
     text(server.name ?? "", {
       size: 13,
@@ -603,22 +630,16 @@ function renderSmall(server, { now, refreshAfter, apiBase, env }) {
       flex: 1,
     }),
   );
-  // 在线时更新时间挂在表头右上角：单独占一行的话，小尺寸在 iPhone SE 那档（141pt）会溢出。
-  // 离线时表头不放时间，免得和页脚的「最后上报」两个相对时间撞在一起。
+  // 更新时间放在行尾，和中尺寸汇总行、大尺寸标题行的位置一致。
+  // 离线时不放，免得和页脚的「最后上报」两个相对时间撞在一起。
   if (m.online) header.push(relativeDate(now, { size: 8 }));
-  header.push(statusDot(m.online));
 
-  // 每列都定宽、末尾用 spacer 撑开，刻意和中/大尺寸的节点行同构。
-  // 一个只有 flex、没有 width 的进度条轨道，是小尺寸里唯一不与它们共享的结构，
-  // 也是这块此前整片空白（只剩一个旗帜）时最可疑的地方，不再使用。
-  // 宽度按 iPhone SE 那档（小尺寸只有 141pt 宽、去掉 padding 剩 113pt）算，宽机型多出来的给 spacer。
   const metricRow = (label, pct, color) =>
     row(
       [
-        cell(22, text(label, { size: 9, color: COLORS.textDim })),
+        text(label, { size: 9, color: COLORS.textDim, maxLines: 1, flex: 1 }),
         bar(m.online ? pct : 0, m.online ? color : COLORS.track, { width: 50 }),
-        cell(28, text(`${Math.round(pct)}%`, { size: 10, color: COLORS.textSub, align: "right" })),
-        { type: "spacer" },
+        cell(30, text(`${Math.round(pct)}%`, { size: 10, color: COLORS.textSub, align: "right" })),
       ],
       { gap: 4, height: 16 },
     );
@@ -627,7 +648,7 @@ function renderSmall(server, { now, refreshAfter, apiBase, env }) {
   const pingLabel = m.ping.label || (env.carrier === "auto" ? "延迟" : "");
   const pingRow = row(
     [
-      cell(22, text(pingLabel, { size: 9, color: COLORS.textDim })),
+      text(pingLabel, { size: 9, color: COLORS.textDim, maxLines: 1, flex: 1 }),
       cell(
         50,
         text(m.online && m.ping.ms != null ? `${Math.round(m.ping.ms)} ms` : "—", {
@@ -637,14 +658,13 @@ function renderSmall(server, { now, refreshAfter, apiBase, env }) {
         }),
       ),
       cell(
-        28,
+        30,
         text(m.online ? formatLoss(m.ping.loss) : "—", {
           size: 9,
           color: lossColor(m.online ? m.ping.loss : null),
           align: "right",
         }),
       ),
-      { type: "spacer" },
     ],
     { gap: 4, height: 16 },
   );
@@ -652,19 +672,17 @@ function renderSmall(server, { now, refreshAfter, apiBase, env }) {
   const footer = m.online
     ? row(
         [
-          text(`↓ ${formatRate(m.netIn)}`, { size: 10, color: COLORS.down }),
-          { type: "spacer" },
-          text(`↑ ${formatRate(m.netOut)}`, { size: 10, color: COLORS.up }),
+          text(`↓ ${formatRate(m.netIn)}`, { size: 10, color: COLORS.down, maxLines: 1, flex: 1 }),
+          text(`↑ ${formatRate(m.netOut)}`, { size: 10, color: COLORS.up, maxLines: 1 }),
         ],
-        { height: 15 },
+        { gap: 4, height: 15 },
       )
     : row(
         [
-          text("离线", { size: 11, weight: "semibold", color: COLORS.offline }),
-          { type: "spacer" },
-          relativeDate(toNumber(server.last_updated) || now, { size: 10 }),
+          text("离线", { size: 11, weight: "semibold", color: COLORS.offline, flex: 1 }),
+          relativeDate(toNumber(server.last_updated) || now, { size: 9 }),
         ],
-        { height: 15 },
+        { gap: 4, height: 15 },
       );
 
   return {
@@ -705,25 +723,29 @@ function renderMedium(servers, stats, { now, refreshAfter, apiBase, env }) {
   const list = pickList(servers, {
     nodes: env.nodes,
     group: env.group,
-    limit: env.rows ?? 5,
+    limit: env.rows ?? LIST_LAYOUT.medium.capacity,
     now,
   });
+  const height = listRowHeight(list.length, LIST_LAYOUT.medium);
 
   return {
     type: "widget",
     padding: 12,
     // 行定高之后不能再靠压缩来兜底，gap 留 4 才够 iPhone SE 那档（中尺寸只有 141pt 高）。
-    gap: 4,
+    gap: LIST_LAYOUT.medium.gap,
     url: `${apiBase}/#/`,
     refreshAfter,
     children: [
       summaryLine(stats, now),
       divider(),
-      ...list.map((server) => nodeRow(server, { dense: true, now, carrier: env.carrier })),
+      ...list.map((server) => nodeRow(server, { dense: true, now, carrier: env.carrier, height })),
       { type: "spacer" },
     ],
   };
 }
+
+/** 汇总方块的高度。tile 与承载它们的那一行都要定高，见 TILE_HEIGHT 的用法。 */
+const TILE_HEIGHT = 38;
 
 /** 高度写死，否则一行数字的第一块会比两行数字的另外两块矮一截，顶边参差。 */
 function tile(children) {
@@ -733,15 +755,18 @@ function tile(children) {
     alignItems: "start",
     gap: 1,
     flex: 1,
-    height: 52,
-    padding: 7,
+    height: TILE_HEIGHT,
+    padding: 6,
     borderRadius: 10,
     backgroundColor: COLORS.fill,
     children,
   };
 }
 
-/** 进度条只有颜色没有文字标签，靠这行图例说明；末尾顺带标明延迟列取的是哪条线路。 */
+/**
+ * 进度条只有颜色没有文字标签，靠这行图例说明；末尾顺带标明延迟列取的是哪条线路。
+ * 标题行本来就窄，图例只留线路名 —— 写成「最优 ms / 丢包」会被挤成省略号。
+ */
 function legend(carrier) {
   const latencyLabel = carrier === "auto" ? "最优" : (CARRIERS[carrier]?.label ?? "最优");
   return row(
@@ -752,7 +777,7 @@ function legend(carrier) {
       text("内存", { size: 8, color: COLORS.textDim }),
       text("●", { size: 7, color: COLORS.disk }),
       text("磁盘", { size: 8, color: COLORS.textDim }),
-      text(`｜${latencyLabel} ms / 丢包`, { size: 8, color: COLORS.textDim }),
+      text(`｜${latencyLabel}`, { size: 8, color: COLORS.textDim, maxLines: 1 }),
     ],
     { gap: 2 },
   );
@@ -762,9 +787,10 @@ function renderLarge(servers, stats, { now, refreshAfter, apiBase, env }) {
   const list = pickList(servers, {
     nodes: env.nodes,
     group: env.group,
-    limit: env.rows ?? 9,
+    limit: env.rows ?? LIST_LAYOUT.large.capacity,
     now,
   });
+  const height = listRowHeight(list.length, LIST_LAYOUT.large);
 
   const total = toNumber(stats.total);
   const online = toNumber(stats.online);
@@ -778,7 +804,7 @@ function renderLarge(servers, stats, { now, refreshAfter, apiBase, env }) {
   return {
     type: "widget",
     padding: 14,
-    gap: 6,
+    gap: LIST_LAYOUT.large.gap,
     url: `${apiBase}/#/`,
     refreshAfter,
     children: [
@@ -791,6 +817,8 @@ function renderLarge(servers, stats, { now, refreshAfter, apiBase, env }) {
         ],
         { gap: 6, height: 18 },
       ),
+      // 这一行必须定高：不定高的话它会把整块小组件多出来的竖直空间全吃掉，
+      // 方块贴在行顶、节点列表被推到底部，中间空出一大片。
       row(
         [
           tile([
@@ -799,23 +827,20 @@ function renderLarge(servers, stats, { now, refreshAfter, apiBase, env }) {
               weight: "semibold",
               color: offline > 0 ? COLORS.offline : COLORS.text,
             }),
-            text("在线 / 总数", { size: 9, color: COLORS.textDim }),
           ]),
           tile([
             text(`↓ ${formatRate(stats.globalSpeedIn)}`, { size: 11, color: COLORS.down }),
             text(`↑ ${formatRate(stats.globalSpeedOut)}`, { size: 11, color: COLORS.up }),
-            text("实时", { size: 9, color: COLORS.textDim }),
           ]),
           tile([
             text(`↓ ${formatBytes(stats.globalNetRx)}`, { size: 11, color: COLORS.down }),
             text(`↑ ${formatBytes(stats.globalNetTx)}`, { size: 11, color: COLORS.up }),
-            text("累计", { size: 9, color: COLORS.textDim }),
           ]),
         ],
-        { gap: 7, align: "start" },
+        { gap: 7, align: "start", height: TILE_HEIGHT },
       ),
       divider(),
-      ...list.map((server) => nodeRow(server, { dense: false, now, carrier: env.carrier })),
+      ...list.map((server) => nodeRow(server, { dense: false, now, carrier: env.carrier, height })),
       { type: "spacer" },
       divider(),
       row([
@@ -829,6 +854,32 @@ function renderLarge(servers, stats, { now, refreshAfter, apiBase, env }) {
             })
           : text("全部在线", { size: 9, color: COLORS.online, flex: 1 }),
       ], { height: 12 }),
+    ],
+  };
+}
+
+/**
+ * DEBUG=1 时的排查视图：只用 widget + 一个 text，是这套 DSL 里最小的一棵树。
+ *
+ * 用来在真机上二分「是取数没成功，还是某个布局结构没渲染出来」——
+ * 这里能显示内容就说明数据和文字都没问题，问题出在 stack / 定宽 / 进度条这些结构上。
+ */
+function renderDebug(ctx, env, servers, stats, refreshAfter) {
+  const lines = [
+    `family: ${ctx?.widgetFamily ?? "(空)"}`,
+    `base: ${hostOf(env.apiBase)}`,
+    `nodes: ${servers.length}`,
+    `stats: ${toNumber(stats.online)}/${toNumber(stats.total)}`,
+    `carrier: ${env.carrier}`,
+    `node: ${env.node || "(空)"}`,
+    ...servers.slice(0, 3).map((s) => `- ${s.name} cpu=${Math.round(toNumber(s.cpu))}`),
+  ];
+  return {
+    type: "widget",
+    padding: 12,
+    refreshAfter,
+    children: [
+      text(lines.join("\n"), { size: 9, color: COLORS.text, maxLines: 12, minScale: 0.5 }),
     ],
   };
 }
@@ -881,6 +932,8 @@ export async function render(ctx, now = Date.now()) {
 
   const { servers } = snapshot;
   const stats = deriveStats(servers, snapshot.stats, now);
+  if (env.debug) return renderDebug(ctx, env, servers, stats, refreshAfter);
+
   const family = ctx?.widgetFamily ?? "systemSmall";
   const options = { now, refreshAfter, apiBase: env.apiBase, env };
 

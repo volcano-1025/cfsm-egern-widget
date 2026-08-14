@@ -216,6 +216,14 @@ const PAGES = {
   medium: [
     ["中 · 自动排序", "systemMedium", makeCtx({ family: "systemMedium" })],
     [
+      "中 · 只有 3 台",
+      "systemMedium",
+      makeCtx({
+        family: "systemMedium",
+        response: { status: 200, json: async () => buildSnapshot(FEW.slice(0, 3)) },
+      }),
+    ],
+    [
       "中 · 指定节点",
       "systemMedium",
       makeCtx({
