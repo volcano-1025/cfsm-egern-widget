@@ -63,12 +63,22 @@ const LATENCY_COLORS = {
   critical: { light: "#dc2626", dark: "#f47067" },
 };
 
-/** 丢包配色。0% 不该抢眼，所以用次要文字色；有丢包才逐档升温。 */
-const LOSS_COLORS = {
-  low: { light: "#a16207", dark: "#cbd83a" },
-  mid: { light: "#b45309", dark: "#e2a928" },
-  high: { light: "#dc2626", dark: "#f47067" },
-};
+/**
+ * 丢包配色。主题用的是连续 HSL 热力渐变而不是离散色阶（src/utils/metricTone.ts 的
+ * lossHeatColor → heatRamp(pct, [1,3,5,10], 20)），这里把那五段曲线与分段边界原样搬过来，
+ * 逐值一致。曲线本身不分浅深色，明度 48–62% 在白底和深底上都读得出来。
+ *
+ * 注意 0% 在主题里是绿色而不是灰色 —— 只有「没有样本」才回退中性色。
+ */
+const LOSS_RAMP = [
+  (t) => [145 - 18 * t, 62 + 8 * t, 48 + 3 * t],
+  (t) => [127 - 47 * t, 70 + 6 * t, 51 + 1 * t],
+  (t) => [80 - 30 * t, 76 + 6 * t, 52 + 1 * t],
+  (t) => [50 - 20 * t, 82 + 4 * t, 53 - 1 * t],
+  (t) => [30 - 24 * t, 86 - 2 * t, 52 - 8 * t],
+];
+const LOSS_BOUNDS = [1, 3, 5, 10];
+const LOSS_TAIL_SPAN = 20;
 
 /**
  * 后端固定的四条探测线路，与主题 mappers.ts 的 CARRIER_TASKS 一一对应。
@@ -159,11 +169,40 @@ export function latencyColor(ms) {
   return LATENCY_COLORS.critical;
 }
 
+/** 主题的 toHsl() 产出 `hsl(...)` 字符串，但 Egern 的 Color 只认 hex / rgba，这里补上换算。 */
+function hslToHex(h, s, l) {
+  const sat = s / 100;
+  const light = l / 100;
+  const a = sat * Math.min(light, 1 - light);
+  const channel = (n) => {
+    const k = (n + h / 30) % 12;
+    const value = light - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    return Math.round(value * 255)
+      .toString(16)
+      .padStart(2, "0");
+  };
+  return `#${channel(0)}${channel(8)}${channel(4)}`;
+}
+
 export function lossColor(pct) {
-  if (pct == null || !Number.isFinite(pct) || pct <= 0) return COLORS.textDim;
-  if (pct < 2) return LOSS_COLORS.low;
-  if (pct < 10) return LOSS_COLORS.mid;
-  return LOSS_COLORS.high;
+  if (pct == null || !Number.isFinite(pct) || pct < 0) return COLORS.textDim;
+  const [b0, b1, b2, b3] = LOSS_BOUNDS;
+  let index = 4;
+  let t = (pct - b3) / LOSS_TAIL_SPAN;
+  if (pct <= b0) {
+    index = 0;
+    t = pct / b0;
+  } else if (pct <= b1) {
+    index = 1;
+    t = (pct - b0) / (b1 - b0);
+  } else if (pct <= b2) {
+    index = 2;
+    t = (pct - b1) / (b2 - b1);
+  } else if (pct <= b3) {
+    index = 3;
+    t = (pct - b2) / (b3 - b2);
+  }
+  return hslToHex(...LOSS_RAMP[index](clamp(t, 0, 1)));
 }
 
 /**
@@ -566,39 +605,48 @@ function renderSmall(server, { now, refreshAfter, apiBase, env }) {
   );
   // 在线时更新时间挂在表头右上角：单独占一行的话，小尺寸在 iPhone SE 那档（141pt）会溢出。
   // 离线时表头不放时间，免得和页脚的「最后上报」两个相对时间撞在一起。
-  if (m.online) header.push(relativeDate(now, { size: 9 }));
+  if (m.online) header.push(relativeDate(now, { size: 8 }));
   header.push(statusDot(m.online));
 
+  // 每列都定宽、末尾用 spacer 撑开，刻意和中/大尺寸的节点行同构。
+  // 一个只有 flex、没有 width 的进度条轨道，是小尺寸里唯一不与它们共享的结构，
+  // 也是这块此前整片空白（只剩一个旗帜）时最可疑的地方，不再使用。
+  // 宽度按 iPhone SE 那档（小尺寸只有 141pt 宽、去掉 padding 剩 113pt）算，宽机型多出来的给 spacer。
   const metricRow = (label, pct, color) =>
     row(
       [
-        cell(26, text(label, { size: 9, color: COLORS.textDim })),
-        bar(m.online ? pct : 0, m.online ? color : COLORS.track, { flex: 1 }),
-        cell(30, text(`${Math.round(pct)}%`, { size: 10, color: COLORS.textSub, align: "right" })),
+        cell(22, text(label, { size: 9, color: COLORS.textDim })),
+        bar(m.online ? pct : 0, m.online ? color : COLORS.track, { width: 50 }),
+        cell(28, text(`${Math.round(pct)}%`, { size: 10, color: COLORS.textSub, align: "right" })),
+        { type: "spacer" },
       ],
-      { gap: 5, height: 13 },
+      { gap: 4, height: 16 },
     );
 
   // auto 模式下标签是实际胜出的那条线路，顺带告诉用户这个数来自哪。
   const pingLabel = m.ping.label || (env.carrier === "auto" ? "延迟" : "");
   const pingRow = row(
     [
-      cell(26, text(pingLabel, { size: 9, color: COLORS.textDim })),
-      { type: "spacer" },
-      text(m.online && m.ping.ms != null ? `${Math.round(m.ping.ms)} ms` : "—", {
-        size: 10,
-        color: latencyColor(m.online ? m.ping.ms : null),
-      }),
+      cell(22, text(pingLabel, { size: 9, color: COLORS.textDim })),
       cell(
-        34,
+        50,
+        text(m.online && m.ping.ms != null ? `${Math.round(m.ping.ms)} ms` : "—", {
+          size: 10,
+          color: latencyColor(m.online ? m.ping.ms : null),
+          align: "right",
+        }),
+      ),
+      cell(
+        28,
         text(m.online ? formatLoss(m.ping.loss) : "—", {
           size: 9,
           color: lossColor(m.online ? m.ping.loss : null),
           align: "right",
         }),
       ),
+      { type: "spacer" },
     ],
-    { gap: 5, height: 13 },
+    { gap: 4, height: 16 },
   );
 
   const footer = m.online
@@ -608,7 +656,7 @@ function renderSmall(server, { now, refreshAfter, apiBase, env }) {
           { type: "spacer" },
           text(`↑ ${formatRate(m.netOut)}`, { size: 10, color: COLORS.up }),
         ],
-        { height: 14 },
+        { height: 15 },
       )
     : row(
         [
@@ -616,7 +664,7 @@ function renderSmall(server, { now, refreshAfter, apiBase, env }) {
           { type: "spacer" },
           relativeDate(toNumber(server.last_updated) || now, { size: 10 }),
         ],
-        { height: 14 },
+        { height: 15 },
       );
 
   return {

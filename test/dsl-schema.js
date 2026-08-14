@@ -223,7 +223,13 @@ export function collectNodeRows(node, out = []) {
   const children = node.children ?? [];
   const hasDot = children.some((c) => c.type === "text" && c.text === "●");
   const hasBar = children.some(
-    (c) => c.type === "stack" && c.borderRadius != null && Array.isArray(c.children) && c.children.length === 2,
+    (c) =>
+      c.type === "stack" &&
+      c.borderRadius != null &&
+      Array.isArray(c.children) &&
+      c.children.length === 2 &&
+      // 填充段 + 剩余段，两段都按占比分配 —— 大尺寸的汇总 tile 也是圆角双子元素，靠这条区分开
+      c.children.every((k) => k.type === "stack" && typeof k.flex === "number"),
   );
   if (hasDot && hasBar) out.push(node);
   children.forEach((child) => collectNodeRows(child, out));

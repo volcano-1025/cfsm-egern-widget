@@ -176,12 +176,21 @@ describe("丢包展示", () => {
     expect(formatLoss(null)).toBe("—");
   });
 
-  it("0% 用次要文字色，有丢包才逐档升温", () => {
-    expect(lossColor(0).dark).toBe("#9198a1");
+  it("逐值复刻主题的连续热力渐变 heatRamp(pct, [1,3,5,10], 20)", () => {
+    // hsl(145 62% 48%) —— 主题 LOSS_RAMP 第一段的起点，0% 是绿色而不是灰色
+    expect(lossColor(0)).toBe("#2fc66e");
+    expect(lossColor(1)).toBe("#2bda3f");
+    expect(lossColor(3)).toBe("#a4e228");
+    expect(lossColor(5)).toBe("#e9c925");
+    expect(lossColor(10)).toBe("#ee851b");
+    // 末段跨度 20，30% 以上封顶
+    expect(lossColor(30)).toBe("#ce2512");
+    expect(lossColor(100)).toBe("#ce2512");
+  });
+
+  it("只有「没有样本」才回退中性色", () => {
     expect(lossColor(null).dark).toBe("#9198a1");
-    expect(lossColor(1).dark).not.toBe(lossColor(0).dark);
-    expect(lossColor(5).dark).not.toBe(lossColor(1).dark);
-    expect(lossColor(50).dark).not.toBe(lossColor(5).dark);
+    expect(lossColor(-1).dark).toBe("#9198a1");
   });
 });
 
@@ -370,6 +379,30 @@ describe("三个尺寸产出的 DSL", () => {
       const rows = collectNodeRows(tree);
       expect(rows.length).toBeGreaterThan(0);
       for (const row of rows) expect(row.height).toBeGreaterThan(0);
+    }
+  });
+
+  it("进度条轨道一律定宽", async () => {
+    // 真机上小尺寸曾整片空白、只剩一个旗帜，唯一不与中/大尺寸共享的结构就是
+    // 「只有 flex、没有 width 的轨道」。三个尺寸都不许再出现这种轨道。
+    for (const family of ["systemSmall", "systemMedium", "systemLarge"]) {
+      const tree = await render(ctxWith({ family, env: { NODE: "hk-01" } }), NOW);
+      const tracks = [];
+      const walk = (n) => {
+        if (!n || typeof n !== "object") return;
+        const kids = n.children ?? [];
+        // 轨道的判据：圆角容器，两个子元素都是按占比分配的 stack（填充段 + 剩余段）
+        const isTrack =
+          n.type === "stack" &&
+          n.borderRadius != null &&
+          kids.length === 2 &&
+          kids.every((k) => k.type === "stack" && typeof k.flex === "number");
+        if (isTrack) tracks.push(n);
+        kids.forEach(walk);
+      };
+      walk(tree);
+      expect(tracks.length).toBeGreaterThan(0);
+      for (const track of tracks) expect(typeof track.width).toBe("number");
     }
   });
 
