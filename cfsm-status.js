@@ -127,13 +127,20 @@ const GLASS_GRADIENT = {
   startPoint: { x: 0, y: 0 },
   endPoint: { x: 0, y: 1 },
   colors: [
-    { light: "rgba(142, 144, 152, 0.34)", dark: "rgba(118, 130, 146, 0.30)" },
-    { light: "rgba(142, 144, 152, 0.18)", dark: "rgba(118, 130, 146, 0.14)" },
+    { light: "rgba(142, 144, 152, 0.26)", dark: "rgba(118, 130, 146, 0.26)" },
+    { light: "rgba(142, 144, 152, 0.12)", dark: "rgba(118, 130, 146, 0.12)" },
   ],
 };
 
 /** 不透明背景，取主题 tokens.css 的 --surface。 */
 const SOLID_BACKGROUND = { light: "#ffffff", dark: "#22272e" };
+
+/**
+ * 全透明。用来判断 Egern 到底有没有自己铺一层不透明的容器底：
+ * 如果它只画我们给的颜色，这一档就能透出壁纸；如果仍是一块浅灰，说明容器底是不透明的，
+ * 那么无论我们把 alpha 调到多低，都做不出原生小组件那种真透明。
+ */
+const CLEAR_BACKGROUND = "rgba(0, 0, 0, 0)";
 
 const BYTE_UNITS = ["B", "KB", "MB", "GB", "TB", "PB"];
 
@@ -244,7 +251,14 @@ export function normalizeBackground(raw) {
   const key = String(raw ?? "").trim().toLowerCase();
   if (/^(system|none|默认|系统)$/.test(key)) return "system";
   if (/^(solid|不透明|纯色)$/.test(key)) return "solid";
+  if (/^(clear|transparent|透明)$/.test(key)) return "clear";
   return "glass";
+}
+
+/** LATENCY_STYLE 环境变量 → 延迟数值的画法。认不出来的一律当 chip。 */
+export function normalizeLatencyStyle(raw) {
+  const key = String(raw ?? "").trim().toLowerCase();
+  return /^(text|文字|纯文字)$/.test(key) ? "text" : "chip";
 }
 
 /** CARRIER 环境变量 → 线路 key 或 "auto"。认不出来的一律当 auto。 */
@@ -381,6 +395,7 @@ export function readEnv(ctx) {
     carrier: normalizeCarrier(env.CARRIER),
     sort: normalizeSort(env.SORT),
     background: normalizeBackground(env.BACKGROUND),
+    latencyStyle: normalizeLatencyStyle(env.LATENCY_STYLE),
     debug: /^(1|true|yes|on)$/i.test(String(env.DEBUG ?? "").trim()),
     rows: Number.isFinite(rows) && rows > 0 ? rows : null,
     refreshMinutes: Number.isFinite(refresh) && refresh > 0 ? refresh : 1,
@@ -531,7 +546,46 @@ function divider() {
 function backgroundOf(style) {
   if (style === "solid") return { backgroundColor: SOLID_BACKGROUND };
   if (style === "glass") return { backgroundGradient: GLASS_GRADIENT };
+  if (style === "clear") return { backgroundColor: CLEAR_BACKGROUND };
   return {};
+}
+
+/** hex → 同色的半透明 rgba。已经是 rgba 之类的写法就原样返回。 */
+function withAlpha(color, alpha) {
+  const convert = (value) => {
+    const match = /^#([0-9a-f]{6})$/i.exec(String(value).trim());
+    if (!match) return String(value);
+    const n = Number.parseInt(match[1], 16);
+    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+  };
+  if (typeof color === "string") return convert(color);
+  return { light: convert(color.light), dark: convert(color.dark) };
+}
+
+/**
+ * 延迟数值。
+ *
+ * `chip`（默认）把主题的延迟色画成底色、数字本身用正文色 —— 延迟档位仍然一眼可辨，
+ * 但可读性不再取决于那几档颜色本身。主题的 --latency-good / --latency-moderate
+ * 是画在深色卡片上的黄绿，直接当文字色摆在浅色小组件上根本看不清。
+ * `text` 是老做法：数字直接染成延迟色。
+ */
+function latencyValue(ms, { width, size, style, suffix = "" }) {
+  const tone = latencyColor(ms);
+  const label = ms == null ? "—" : `${Math.round(ms)}${suffix}`;
+  if (style === "text" || ms == null) {
+    return cell(width, text(label, { size, color: tone, align: "right" }));
+  }
+  return {
+    type: "stack",
+    direction: "row",
+    alignItems: "center",
+    width,
+    height: 14,
+    borderRadius: 4,
+    backgroundColor: withAlpha(tone, 0.3),
+    children: [text(label, { size, color: COLORS.text, align: "center", flex: 1 })],
+  };
 }
 
 function statusDot(online) {
@@ -554,18 +608,11 @@ function relativeDate(timeMs, { size = 9, color = COLORS.textDim, align = "right
  * 延迟与丢包两列。拆成两个定宽 cell 而不是一段文字，右端的数字才能对齐成一列。
  * 没有数据时占位画「—」，宁可留白也不让后面的列往回缩。
  */
-function pingCells(ping, { size = 10, pingWidth = 30, lossWidth = 26 } = {}) {
+function pingCells(ping, { size = 10, pingWidth = 30, lossWidth = 26, style = "chip" } = {}) {
   const ms = ping?.ms ?? null;
   const loss = ping?.loss ?? null;
   return [
-    cell(
-      pingWidth,
-      text(ms == null ? "—" : `${Math.round(ms)}`, {
-        size,
-        color: latencyColor(ms),
-        align: "right",
-      }),
-    ),
+    latencyValue(ms, { width: pingWidth, size, style }),
     cell(
       lossWidth,
       text(formatLoss(loss), { size: size - 1, color: lossColor(loss), align: "right" }),
@@ -603,7 +650,10 @@ export function listRowHeight(count, { capacity, base, gap, max }) {
   return clamp(Math.floor((budget - (count - 1) * gap) / count), base, max);
 }
 
-function nodeRow(server, { dense = true, now = Date.now(), carrier = "auto", height = 16 } = {}) {
+function nodeRow(
+  server,
+  { dense = true, now = Date.now(), carrier = "auto", height = 16, latencyStyle = "chip" } = {},
+) {
   const m = metricsOf(server, now, carrier);
   const flag = flagEmoji(server.region);
   const nameColor = m.online ? COLORS.text : COLORS.textDim;
@@ -654,8 +704,9 @@ function nodeRow(server, { dense = true, now = Date.now(), carrier = "auto", hei
   children.push(
     ...pingCells(m.online ? m.ping : null, {
       size: dense ? 10 : 9,
-      pingWidth: dense ? 28 : 24,
+      pingWidth: dense ? 30 : 26,
       lossWidth: dense ? 26 : 24,
+      style: latencyStyle,
     }),
   );
   return row(children, { gap: dense ? 4 : 3, height });
@@ -707,14 +758,12 @@ function renderSmall(server, { now, refreshAfter, apiBase, env }) {
   const pingRow = row(
     [
       text(pingLabel, { size: 9, color: COLORS.textDim, maxLines: 1, flex: 1 }),
-      cell(
-        50,
-        text(m.online && m.ping.ms != null ? `${Math.round(m.ping.ms)} ms` : "—", {
-          size: 10,
-          color: latencyColor(m.online ? m.ping.ms : null),
-          align: "right",
-        }),
-      ),
+      latencyValue(m.online ? m.ping.ms : null, {
+        width: 50,
+        size: 10,
+        style: env.latencyStyle,
+        suffix: " ms",
+      }),
       cell(
         30,
         text(m.online ? formatLoss(m.ping.loss) : "—", {
@@ -745,7 +794,8 @@ function renderSmall(server, { now, refreshAfter, apiBase, env }) {
 
   return {
     type: "widget",
-    padding: 14,
+    // 边距比早先大一档：贴边太紧，尤其是铺了玻璃底之后更显得挤。
+    padding: 15,
     gap: 5,
     ...backgroundOf(env.background),
     url: `${apiBase}/#/server/${encodeURIComponent(String(server.id))}`,
@@ -790,7 +840,7 @@ function renderMedium(servers, stats, { now, refreshAfter, apiBase, env }) {
 
   return {
     type: "widget",
-    padding: 12,
+    padding: 15,
     // 行定高之后不能再靠压缩来兜底，gap 留 4 才够 iPhone SE 那档（中尺寸只有 141pt 高）。
     gap: LIST_LAYOUT.medium.gap,
     ...backgroundOf(env.background),
@@ -799,7 +849,13 @@ function renderMedium(servers, stats, { now, refreshAfter, apiBase, env }) {
     children: [
       summaryLine(stats, now),
       divider(),
-      ...list.map((server) => nodeRow(server, { dense: true, now, carrier: env.carrier, height })),
+      ...list.map((server) => nodeRow(server, {
+          dense: true,
+          now,
+          carrier: env.carrier,
+          height,
+          latencyStyle: env.latencyStyle,
+        })),
       { type: "spacer" },
     ],
   };
@@ -865,7 +921,7 @@ function renderLarge(servers, stats, { now, refreshAfter, apiBase, env }) {
 
   return {
     type: "widget",
-    padding: 14,
+    padding: 16,
     gap: LIST_LAYOUT.large.gap,
     ...backgroundOf(env.background),
     url: `${apiBase}/#/`,
@@ -903,7 +959,13 @@ function renderLarge(servers, stats, { now, refreshAfter, apiBase, env }) {
         { gap: 7, align: "start", height: TILE_HEIGHT },
       ),
       divider(),
-      ...list.map((server) => nodeRow(server, { dense: false, now, carrier: env.carrier, height })),
+      ...list.map((server) => nodeRow(server, {
+          dense: false,
+          now,
+          carrier: env.carrier,
+          height,
+          latencyStyle: env.latencyStyle,
+        })),
       { type: "spacer" },
       divider(),
       row([
@@ -939,7 +1001,7 @@ function renderDebug(ctx, env, servers, stats, refreshAfter) {
   ];
   return {
     type: "widget",
-    padding: 12,
+    padding: 16,
     refreshAfter,
     children: [
       text(lines.join("\n"), { size: 9, color: COLORS.text, maxLines: 12, minScale: 0.5 }),
@@ -971,7 +1033,7 @@ function renderError(message, { refreshAfter, hint, background = "glass" } = {})
   children.push({ type: "spacer" });
   return {
     type: "widget",
-    padding: 14,
+    padding: 16,
     gap: 4,
     ...backgroundOf(background),
     refreshAfter,

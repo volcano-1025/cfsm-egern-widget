@@ -249,6 +249,16 @@ const PAGES = {
       makeCtx({ family: "systemMedium", env: { BACKGROUND: "solid" } }),
     ],
     [
+      "中 · 背景 clear",
+      "systemMedium",
+      makeCtx({ family: "systemMedium", env: { BACKGROUND: "clear" } }),
+    ],
+    [
+      "中 · 延迟纯文字",
+      "systemMedium",
+      makeCtx({ family: "systemMedium", env: { LATENCY_STYLE: "text" } }),
+    ],
+    [
       "中 · 只有 3 台",
       "systemMedium",
       makeCtx({

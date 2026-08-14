@@ -340,7 +340,14 @@ describe("readEnv", () => {
     expect(readEnv({ env: {} }).background).toBe("glass");
     expect(readEnv({ env: { BACKGROUND: "system" } }).background).toBe("system");
     expect(readEnv({ env: { BACKGROUND: "solid" } }).background).toBe("solid");
+    expect(readEnv({ env: { BACKGROUND: "clear" } }).background).toBe("clear");
     expect(readEnv({ env: { BACKGROUND: "乱写" } }).background).toBe("glass");
+  });
+
+  it("LATENCY_STYLE 默认色块", () => {
+    expect(readEnv({ env: {} }).latencyStyle).toBe("chip");
+    expect(readEnv({ env: { LATENCY_STYLE: "text" } }).latencyStyle).toBe("text");
+    expect(readEnv({ env: { LATENCY_STYLE: "乱写" } }).latencyStyle).toBe("chip");
   });
 
   it("没有 env 也不炸", () => {
@@ -475,6 +482,50 @@ describe("三个尺寸产出的 DSL", () => {
       expect(validateTree(solid)).toEqual([]);
       expect(solid.backgroundColor).toEqual({ light: "#ffffff", dark: "#22272e" });
     }
+  });
+
+  it("延迟默认画成色块：底色带主题色调，数字用正文色保证可读", async () => {
+    const tree = await render(ctxWith({ family: "systemMedium", env: { NODES: "us-la" } }), NOW);
+    const chips = [];
+    const walk = (n) => {
+      if (!n || typeof n !== "object") return;
+      if (n.type === "stack" && n.borderRadius === 4) chips.push(n);
+      (n.children ?? []).forEach(walk);
+    };
+    walk(tree);
+    expect(chips).toHaveLength(1);
+    // us-la 电信 152ms 属于 moderate 档（#cbd83a），底色是同色的三成透明
+    expect(chips[0].backgroundColor.light).toBe("rgba(203, 216, 58, 0.3)");
+    expect(chips[0].children[0].textColor).toEqual({ light: "#18181b", dark: "#d1d7e0" });
+    expect(chips[0].children[0].text).toBe("152");
+  });
+
+  it("LATENCY_STYLE=text 回到把数字直接染成延迟色", async () => {
+    const tree = await render(
+      ctxWith({ family: "systemMedium", env: { NODES: "us-la", LATENCY_STYLE: "text" } }),
+      NOW,
+    );
+    let found = null;
+    const walk = (n) => {
+      if (!n || typeof n !== "object") return;
+      if (n.type === "text" && n.text === "152") found = n;
+      (n.children ?? []).forEach(walk);
+    };
+    walk(tree);
+    expect(found.textColor).toEqual({ light: "#cbd83a", dark: "#cbd83a" });
+  });
+
+  it("没有延迟数据时不画色块，留一个破折号", async () => {
+    const tree = await render(ctxWith({ family: "systemMedium", env: { NODES: "de-fra" } }), NOW);
+    const chips = [];
+    const walk = (n) => {
+      if (!n || typeof n !== "object") return;
+      if (n.type === "stack" && n.borderRadius === 4) chips.push(n);
+      (n.children ?? []).forEach(walk);
+    };
+    walk(tree);
+    expect(chips).toHaveLength(0);
+    expect(collectText(tree)).toContain("—");
   });
 
   it("错误态也铺同一套背景", async () => {
