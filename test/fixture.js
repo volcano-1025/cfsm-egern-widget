@@ -22,6 +22,30 @@ export const NOW = 1_770_000_000_000;
 
 const GiB = 1024; // MiB → GiB 的换算，写百分比时更直观
 
+/**
+ * 造一份后端的一小时探测窗口：30 格、每 2 分钟一个，最后一格就在 NOW。
+ *
+ * `slot(i)` 返回第 i 格（0 = 最老）的四条线路值，返回 null 表示这格没值。
+ * `ping[]` 和 `loss[]` 是两个分开的数组，靠 `ts` 对齐 —— 和后端下发的形状一致。
+ */
+function window30(slot) {
+  const ping = [];
+  const loss = [];
+  for (let i = 0; i < 30; i += 1) {
+    const ts = NOW - (29 - i) * 2 * MINUTE;
+    const cell = slot(i) ?? {};
+    ping.push({ ts, ct: cell.ct ?? null, cu: cell.cu ?? null, cm: cell.cm ?? null, bd: cell.bd ?? null });
+    loss.push({
+      ts,
+      ct: cell.lossCt ?? null,
+      cu: cell.lossCu ?? null,
+      cm: cell.lossCm ?? null,
+      bd: cell.lossBd ?? null,
+    });
+  }
+  return { ping, loss };
+}
+
 function server(overrides) {
   return {
     id: "",
@@ -81,6 +105,17 @@ export const SERVERS = [
     loss_cu: 0,
     loss_cm: 0,
     is_online: true,
+    // 真实探测的窗口：延迟每格都在动，所以不会被当成复印段。
+    // 电信这一小时里有三格掉包（10 / 20 / 30），其余 27 格是 0 —— 均值 2%，
+    // 而瞬时值 loss_ct 是 0，两种口径能明显区分开。
+    ...window30((i) => ({
+      ct: 36 + (i % 7),
+      cu: 50 + (i % 5),
+      cm: 72 + (i % 3),
+      lossCt: i === 5 ? 10 : i === 12 ? 20 : i === 23 ? 30 : 0,
+      lossCu: 0,
+      lossCm: 0,
+    })),
   }),
   server({
     id: "jp-tokyo",
@@ -98,6 +133,9 @@ export const SERVERS = [
     ping_ct: 61,
     loss_ct: 2,
     is_online: true,
+    // 整段都是复印件：30 格逐字节相同。后端凑格子凑出来的假窗口就长这样，
+    // 必须被整段丢掉、回落到瞬时值 2%，而不是报一个「一小时都 0%」。
+    ...window30(() => ({ ct: 61, lossCt: 0 })),
   }),
   server({
     id: "us-la",
@@ -176,6 +214,10 @@ export const SERVERS = [
     ping_cu: 47,
     ping_cm: 250,
     is_online: true,
+    // 稀疏窗口：只有偶数格有值（奇数格是「没探测到」，不能当 0 算进分母）。
+    // 有值的 15 格里 7 格丢包 8%，均值 3.73%；要是把 15 个空格也当 0 算进去
+    // 就成了 1.87%，正好一半 —— 分母取哪个在这台上一眼能看出来。
+    ...window30((i) => (i % 2 === 0 ? { ct: 44 + i, lossCt: i % 4 === 2 ? 8 : 0 } : null)),
   }),
   server({
     id: "uk-lon",

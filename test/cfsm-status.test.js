@@ -10,11 +10,13 @@ import {
   lossColor,
   metricsOf,
   normalizeCarrier,
+  normalizeLossWindow,
   pickList,
   pickOne,
   pingOf,
   readEnv,
   render,
+  windowLoss,
 } from "../cfsm-status.js";
 import { NOW, SERVERS, buildSnapshot } from "./fixture.js";
 import { collectNodeRows, collectText, countNodeRows, validateTree } from "./dsl-schema.js";
@@ -140,7 +142,7 @@ describe("pingOf", () => {
 
   it("auto 取三网里最小的一条，不看 BD", () => {
     // hk-01 的 bd 是 21，比电信的 38 更低，但不该被选中
-    expect(pingOf(hk, "auto")).toMatchObject({ key: "ct", ms: 38, label: "电信" });
+    expect(pingOf(hk, "auto", { now: NOW })).toMatchObject({ key: "ct", ms: 38, label: "电信" });
   });
 
   it("auto 会带出胜出线路自己的丢包，而不是别条的", () => {
@@ -157,11 +159,11 @@ describe("pingOf", () => {
 
   it("指定线路就认那一条，没有值也不回退到别条", () => {
     // hk-01 三网都有值，点名移动就得是 74
-    expect(pingOf(hk, "cm").ms).toBe(74);
+    expect(pingOf(hk, "cm", { now: NOW }).ms).toBe(74);
     // jp-tokyo 只有电信有值，点名联通只能是空
     const jp = SERVERS.find((s) => s.id === "jp-tokyo");
-    expect(pingOf(jp, "cu")).toMatchObject({ key: "cu", ms: null, loss: null });
-    expect(pingOf(jp, "ct")).toMatchObject({ ms: 61, loss: 2 });
+    expect(pingOf(jp, "cu", { now: NOW })).toMatchObject({ key: "cu", ms: null, loss: null });
+    expect(pingOf(jp, "ct", { now: NOW })).toMatchObject({ ms: 61, loss: 2 });
   });
 
   it("负延迟按探测失败处理", () => {
@@ -177,6 +179,108 @@ describe("pingOf", () => {
   it("什么都没有时给一组空值，不会抛", () => {
     expect(pingOf({}, "auto")).toMatchObject({ ms: null, loss: null });
     expect(pingOf(undefined, "ct")).toMatchObject({ ms: null, loss: null });
+  });
+});
+
+describe("一小时丢包窗口", () => {
+  const byId = (id) => SERVERS.find((s) => s.id === id);
+
+  it("默认取窗口均值，而不是最后一次探测的瞬时值", () => {
+    // hk-01 的 loss_ct 是 0（最后一次探测没掉包），但这一小时里有三格掉了 —— 均值 2%
+    expect(windowLoss(byId("hk-01"), "ct", NOW)).toBeCloseTo(2);
+    expect(pingOf(byId("hk-01"), "ct", { now: NOW })).toMatchObject({
+      loss: 2,
+      windowed: true,
+    });
+  });
+
+  it("LOSS_WINDOW=now 时还是那个瞬时值", () => {
+    expect(pingOf(byId("hk-01"), "ct", { now: NOW, lossWindow: "now" })).toMatchObject({
+      loss: 0,
+      windowed: false,
+    });
+  });
+
+  it("没值的格子不进分母 —— 「没探测到」不等于「没丢包」", () => {
+    // kr-icn 只有 15 格有值，其中 7 格是 8%：56/15 = 3.73，而不是 56/30 = 1.87
+    expect(windowLoss(byId("kr-icn"), "ct", NOW)).toBeCloseTo(56 / 15);
+  });
+
+  it("整段逐字节相同的复印窗口被丢掉，回落到瞬时值", () => {
+    // jp-tokyo 的 30 格全是同一份 61ms / 0%，是后端凑格子凑出来的
+    expect(windowLoss(byId("jp-tokyo"), "ct", NOW)).toBe(null);
+    expect(pingOf(byId("jp-tokyo"), "ct", { now: NOW })).toMatchObject({
+      loss: 2,
+      windowed: false,
+    });
+  });
+
+  it("旧版后端没有这两个字段时回落到瞬时值", () => {
+    // us-la 整个 fixture 里就没有 ping[] / loss[]
+    expect(windowLoss(byId("us-la"), "ct", NOW)).toBe(null);
+    expect(pingOf(byId("us-la"), "ct", { now: NOW })).toMatchObject({
+      loss: 1.5,
+      windowed: false,
+    });
+  });
+
+  it("只连续 3 格相同不算复印段", () => {
+    const server = {
+      loss: [0, 1, 2, 3].map((i) => ({ ts: NOW - i * 60_000, ct: i < 3 ? 4 : 0 })),
+      ping: [0, 1, 2, 3].map((i) => ({ ts: NOW - i * 60_000, ct: i < 3 ? 50 : 60 })),
+    };
+    // 3 格 4% + 1 格 0%
+    expect(windowLoss(server, "ct", NOW)).toBeCloseTo(3);
+  });
+
+  it("超出一小时的格子不算进来", () => {
+    const server = {
+      loss: [
+        { ts: NOW - 90 * 60_000, ct: 100 },
+        { ts: NOW - 10 * 60_000, ct: 4 },
+      ],
+      ping: [
+        { ts: NOW - 90 * 60_000, ct: 50 },
+        { ts: NOW - 10 * 60_000, ct: 60 },
+      ],
+    };
+    expect(windowLoss(server, "ct", NOW)).toBe(4);
+  });
+
+  it("线路被禁用时后端给 false，不能当成 0%", () => {
+    const server = {
+      loss: [
+        { ts: NOW - 60_000, ct: false },
+        { ts: NOW - 120_000, ct: false },
+      ],
+      ping: [
+        { ts: NOW - 60_000, ct: false },
+        { ts: NOW - 120_000, ct: false },
+      ],
+    };
+    expect(windowLoss(server, "ct", NOW)).toBe(null);
+  });
+
+  it("秒级时间戳也认", () => {
+    const server = {
+      loss: [{ ts: Math.floor((NOW - 60_000) / 1000), ct: 6 }],
+      ping: [{ ts: Math.floor((NOW - 60_000) / 1000), ct: 50 }],
+    };
+    expect(windowLoss(server, "ct", NOW)).toBe(6);
+  });
+
+  it("没有窗口字段时不抛", () => {
+    expect(windowLoss({}, "ct", NOW)).toBe(null);
+    expect(windowLoss(undefined, "ct", NOW)).toBe(null);
+    expect(windowLoss({ loss: "坏数据" }, "ct", NOW)).toBe(null);
+  });
+
+  it("LOSS_WINDOW 认得出 now，其余一律 hour", () => {
+    expect(normalizeLossWindow("now")).toBe("now");
+    expect(normalizeLossWindow("实时")).toBe("now");
+    expect(normalizeLossWindow("")).toBe("hour");
+    expect(normalizeLossWindow(undefined)).toBe("hour");
+    expect(normalizeLossWindow("1h")).toBe("hour");
   });
 });
 

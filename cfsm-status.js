@@ -7,10 +7,12 @@
  *   大 —— 标题 + 三块汇总 + 更长的节点列表（多一列磁盘）+ 离线名单
  *
  * 延迟看哪条线路由 CARRIER 环境变量决定（电信/联通/移动/BD），默认 auto 取三网最优。
+ * 丢包默认显示**最近一小时的均值**（LOSS_WINDOW=now 可换回瞬时值），数据来自同一个响应里的
+ * `loss[]` 窗口 —— 见下面的 WINDOW_MS。
  *
- * 只发一个请求：`GET {API_BASE}/api/servers`，它一次带回 stats 汇总与每台机器的全部指标。
- * 绝不碰 `/api/history/all` —— 逐节点查历史会让后端 D1 读行翻几十倍，面板主题同样禁止在
- * 概览场景使用它。
+ * 只发一个请求：`GET {API_BASE}/api/servers`，它一次带回 stats 汇总与每台机器的全部指标，
+ * 连最近一小时的探测窗口都在里面。绝不碰 `/api/history/all` —— 逐节点查历史会让后端 D1
+ * 读行翻几十倍，面板主题同样禁止在概览场景使用它。
  *
  * 必须保持单文件、无依赖：Egern 通过 script_url 远程加载本文件，没有打包步骤。
  * 文件末尾的具名导出只给单元测试用，Egern 只取 default。
@@ -21,6 +23,8 @@
  *   - 延迟配色阶梯 60/100/160/200 ms（主题 src/utils/metricTone.ts 的 latencyHeatColor）
  *   - 字节格式化：1024 进制，≥100 取整、≥10 一位、其余两位小数
  *     （主题 src/utils/format.ts 的 formatBytes）
+ *   - 丢包窗口：复印段的判定与丢弃规则抄自主题 src/services/pingLiveStore.ts 的
+ *     dropBackfilledRuns（连续 4 格逐字节相同即整段丢掉）
  *   - 配色取自主题 src/styles/tokens.css 的 light / dark 两套 token
  *   - 单位：ram_* / disk_* 是 MiB，速率与累计量是字节，last_updated 是毫秒
  */
@@ -94,6 +98,27 @@ const CARRIERS = {
 
 /** auto 模式只在三网里选最优，不含 BD —— 与主题首页卡片的口径一致。 */
 const AUTO_CARRIERS = ["ct", "cu", "cm"];
+
+/** 四条线路的 key，顺序与窗口点里的字段名一致。 */
+const CARRIER_KEYS = ["ct", "cu", "cm", "bd"];
+
+/**
+ * `/api/servers` 从 Workers 2.8.3 Beta2 起还会下发最近一小时的探测窗口：
+ * `ping[]` 与 `loss[]` 各 30 格、每 2 分钟一个，格式是 `{ ts, ct, cu, cm, bd }`。
+ * 它和实时值在同一个响应里，用它算一小时丢包**不增加任何请求**。
+ *
+ * 旧版后端没有这两个字段，这时只能回落到 `loss_*` 那个瞬时值。
+ */
+const WINDOW_MS = 60 * 60 * 1000;
+
+/**
+ * 连续这么多格逐字节相同就整段丢掉（主题 pingLiveStore 的 BACKFILL_RUN_MIN_LENGTH）。
+ *
+ * 后端不是「没数据就留空」，而是保证凑够 30 格：缺的格子取最近邻复制过来（没有距离上限）。
+ * 于是一台刚加进来 7 分钟的机器，窗口里也有一整个小时的「数据」。复印件的特征是四条线路的
+ * 延迟和丢包同时逐字节相同 —— 真探测做不到 —— 所以整段丢掉，不让它把一小时均值带偏。
+ */
+const BACKFILL_RUN_MIN = 4;
 
 /** CARRIER 环境变量的容错写法，中英文都收。 */
 const CARRIER_ALIASES = {
@@ -243,6 +268,17 @@ export function formatLoss(pct) {
   return `${Math.round(pct)}%`;
 }
 
+/**
+ * LOSS_WINDOW 环境变量 → 丢包的口径。认不出来的一律当 hour。
+ *
+ * 默认 hour：瞬时值是最后一次探测的结果，一次抖动就把整行染红，看完刷新一次又没了；
+ * 一小时均值更能说明「这台是不是真的在掉包」。想要原来那个瞬时值就填 now。
+ */
+export function normalizeLossWindow(raw) {
+  const key = String(raw ?? "").trim().toLowerCase();
+  return /^(now|instant|实时|瞬时|当前)$/.test(key) ? "now" : "hour";
+}
+
 /** SORT 环境变量 → 排序方式。认不出来的一律当 order（跟随后台）。 */
 export function normalizeSort(raw) {
   const key = String(raw ?? "").trim().toLowerCase();
@@ -276,22 +312,122 @@ export function isOnline(server, now = Date.now()) {
   return now - toNumber(server?.last_updated) < ONLINE_THRESHOLD_MS;
 }
 
-/** 读一条线路的延迟与丢包。延迟为负在后端语义里是探测失败，按「没有值」处理。 */
-function carrierSample(server, key) {
+/** 窗口里的一个线路值。`false` 是「这台禁用了这条线路」，和缺值一样按 null 处理。 */
+function pointValue(raw) {
+  if (raw == null || typeof raw === "boolean") return null;
+  const value = typeof raw === "number" ? raw : Number.parseFloat(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+/** 秒级时间戳补成毫秒（与主题 normalizeTimestamp 同一套判据）。 */
+function pointTime(raw) {
+  const value = pointValue(raw);
+  if (value == null || value <= 0) return 0;
+  return value < 10_000_000_000 ? value * 1000 : value;
+}
+
+/**
+ * 把 `ping[]` / `loss[]` 两个数组按时间戳合成一串格子，按时间升序。
+ *
+ * 两个数组是分开下发的，靠 `ts` 对齐；复印段的判定要求延迟和丢包同时相同，
+ * 所以必须合起来看，只比丢包会把「探测正常、丢包恒为 0」的真数据误判成复印件。
+ */
+function latencyWindow(server, now) {
+  const lossPoints = Array.isArray(server?.loss) ? server.loss : [];
+  if (!lossPoints.length) return [];
+
+  const pingByTs = new Map();
+  for (const point of Array.isArray(server?.ping) ? server.ping : []) {
+    const time = pointTime(point?.ts);
+    if (time > 0) pingByTs.set(time, point);
+  }
+
+  const slots = [];
+  for (const point of lossPoints) {
+    const time = pointTime(point?.ts);
+    if (time <= 0 || now - time > WINDOW_MS) continue;
+    const ping = pingByTs.get(time);
+    slots.push({
+      time,
+      // 前四个是丢包、后四个是延迟，复印段判定按这八个值整体比对。
+      loss: { ct: pointValue(point?.ct), cu: pointValue(point?.cu), cm: pointValue(point?.cm), bd: pointValue(point?.bd) },
+      ping: { ct: pointValue(ping?.ct), cu: pointValue(ping?.cu), cm: pointValue(ping?.cm), bd: pointValue(ping?.bd) },
+    });
+  }
+  return slots.sort((a, b) => a.time - b.time);
+}
+
+function sameSlot(a, b) {
+  return CARRIER_KEYS.every((k) => a.loss[k] === b.loss[k] && a.ping[k] === b.ping[k]);
+}
+
+/**
+ * 丢掉窗口里连续复印出来的那几段（见 {@link BACKFILL_RUN_MIN}）。
+ *
+ * 整段丢掉而不是留一格：复制源可能在这段的任意一端，留哪一格都是猜；真值那一格在
+ * 相邻的非重复段里本来就还在。全被丢光就当这台没有窗口，回落到瞬时值。
+ */
+function dropBackfilled(slots) {
+  if (slots.length < BACKFILL_RUN_MIN) return slots;
+  const kept = [];
+  let runStart = 0;
+  for (let i = 1; i <= slots.length; i += 1) {
+    if (i < slots.length && sameSlot(slots[i], slots[runStart])) continue;
+    if (i - runStart < BACKFILL_RUN_MIN) kept.push(...slots.slice(runStart, i));
+    runStart = i;
+  }
+  return kept;
+}
+
+/**
+ * 一条线路最近一小时的平均丢包。没有可用格子返回 null（交给调用方回落到瞬时值）。
+ *
+ * 每格是一次探测采样（后端历史每行 `count` 恒为 1），所以直接对有值的格子取算术平均，
+ * 等价于主题 `bucketPingLoss` 的加权平均。没值的格子不计入分母 —— 那是「没探测到」，
+ * 不是「没丢包」，拿 0 补进去会把丢包率冲淡。
+ */
+/** 这台机器在窗口里还剩几个可用格子（扣掉复印段）。只给 DEBUG 视图用。 */
+function windowSlotCount(server, now) {
+  return dropBackfilled(latencyWindow(server, now)).length;
+}
+
+export function windowLoss(server, key, now = Date.now()) {
+  const slots = dropBackfilled(latencyWindow(server, now));
+  let sum = 0;
+  let count = 0;
+  for (const slot of slots) {
+    const value = slot.loss[key];
+    if (value == null) continue;
+    sum += clamp(value, 0, 100);
+    count += 1;
+  }
+  return count > 0 ? sum / count : null;
+}
+
+/**
+ * 读一条线路的延迟与丢包。延迟为负在后端语义里是探测失败，按「没有值」处理。
+ *
+ * `lossWindow` 为 hour 时丢包取最近一小时的均值；窗口不可用（旧版后端、或整段都是
+ * 复印件）就回落到 `loss_*` 那个瞬时值，`windowed` 记下这次实际用的是哪一种。
+ */
+function carrierSample(server, key, { now = Date.now(), lossWindow = "hour" } = {}) {
   const carrier = CARRIERS[key];
   if (!carrier) return null;
   const pingRaw = server?.[carrier.ping];
   const lossRaw = server?.[carrier.loss];
   const ms = pingRaw == null ? null : toNumber(pingRaw);
+  const instant = lossRaw == null ? null : clamp(toNumber(lossRaw), 0, 100);
+  const hourly = lossWindow === "hour" ? windowLoss(server, key, now) : null;
   return {
     key,
     label: carrier.label,
     ms: ms != null && ms > 0 ? ms : null,
-    loss: lossRaw == null ? null : clamp(toNumber(lossRaw), 0, 100),
+    loss: hourly ?? instant,
+    windowed: hourly != null,
   };
 }
 
-const EMPTY_PING = { key: null, label: "", ms: null, loss: null };
+const EMPTY_PING = { key: null, label: "", ms: null, loss: null, windowed: false };
 
 /**
  * 要显示的那条线路的延迟与丢包。
@@ -300,16 +436,16 @@ const EMPTY_PING = { key: null, label: "", ms: null, loss: null };
  * `auto` 在三网里挑延迟最低的。三条都没有延迟值时退而取有丢包数据的那条 ——
  * 100% 丢包恰恰表现为「有丢包、没延迟」，这时候更该把丢包显示出来。
  */
-export function pingOf(server, carrier = "auto") {
-  if (carrier !== "auto") return carrierSample(server, carrier) ?? EMPTY_PING;
+export function pingOf(server, carrier = "auto", opts = {}) {
+  if (carrier !== "auto") return carrierSample(server, carrier, opts) ?? EMPTY_PING;
 
-  const samples = AUTO_CARRIERS.map((key) => carrierSample(server, key)).filter(Boolean);
+  const samples = AUTO_CARRIERS.map((key) => carrierSample(server, key, opts)).filter(Boolean);
   const measured = samples.filter((s) => s.ms != null);
   if (measured.length) return measured.reduce((best, s) => (s.ms < best.ms ? s : best));
   return samples.find((s) => s.loss != null) ?? EMPTY_PING;
 }
 
-export function metricsOf(server, now = Date.now(), carrier = "auto") {
+export function metricsOf(server, now = Date.now(), carrier = "auto", lossWindow = "hour") {
   const ramTotal = toNumber(server?.ram_total);
   const diskTotal = toNumber(server?.disk_total);
   return {
@@ -319,7 +455,7 @@ export function metricsOf(server, now = Date.now(), carrier = "auto") {
     diskPct: diskTotal > 0 ? clamp((toNumber(server?.disk_used) / diskTotal) * 100, 0, 100) : 0,
     netIn: toNumber(server?.net_in_speed),
     netOut: toNumber(server?.net_out_speed),
-    ping: pingOf(server, carrier),
+    ping: pingOf(server, carrier, { now, lossWindow }),
   };
 }
 
@@ -396,6 +532,7 @@ export function readEnv(ctx) {
     group: String(env.GROUP ?? "").trim(),
     title: String(env.TITLE ?? "").trim() || "服务器状态",
     carrier: normalizeCarrier(env.CARRIER),
+    lossWindow: normalizeLossWindow(env.LOSS_WINDOW),
     sort: normalizeSort(env.SORT),
     background: normalizeBackground(env.BACKGROUND),
     latencyStyle: normalizeLatencyStyle(env.LATENCY_STYLE),
@@ -653,9 +790,16 @@ export function listRowHeight(count, { capacity, base, gap, max }) {
 
 function nodeRow(
   server,
-  { dense = true, now = Date.now(), carrier = "auto", height = 16, latencyStyle = "chip" } = {},
+  {
+    dense = true,
+    now = Date.now(),
+    carrier = "auto",
+    lossWindow = "hour",
+    height = 16,
+    latencyStyle = "chip",
+  } = {},
 ) {
-  const m = metricsOf(server, now, carrier);
+  const m = metricsOf(server, now, carrier, lossWindow);
   const flag = flagEmoji(server.region);
   const nameColor = m.online ? COLORS.text : COLORS.textDim;
   const barWidth = dense ? 30 : 22;
@@ -725,7 +869,7 @@ function nodeRow(
  * 改这里之前先想清楚新结构在中/大尺寸里有没有先例。
  */
 function renderSmall(server, { now, refreshAfter, apiBase, env }) {
-  const m = metricsOf(server, now, env.carrier);
+  const m = metricsOf(server, now, env.carrier, env.lossWindow);
   const flag = flagEmoji(server.region);
 
   const header = [statusDot(m.online)];
@@ -854,6 +998,7 @@ function renderMedium(servers, stats, { now, refreshAfter, apiBase, env }) {
           dense: true,
           now,
           carrier: env.carrier,
+          lossWindow: env.lossWindow,
           height,
           latencyStyle: env.latencyStyle,
         })),
@@ -964,6 +1109,7 @@ function renderLarge(servers, stats, { now, refreshAfter, apiBase, env }) {
           dense: false,
           now,
           carrier: env.carrier,
+          lossWindow: env.lossWindow,
           height,
           latencyStyle: env.latencyStyle,
         })),
@@ -997,6 +1143,8 @@ function renderDebug(ctx, env, servers, stats, refreshAfter) {
     `nodes: ${servers.length}`,
     `stats: ${toNumber(stats.online)}/${toNumber(stats.total)}`,
     `carrier: ${env.carrier}`,
+    // 一小时窗口是 Workers 2.8.3 Beta2 起才有的字段，真机上先看这里有没有格子。
+    `loss: ${env.lossWindow} (窗口 ${windowSlotCount(servers[0], Date.now())} 格)`,
     `node: ${env.node || "(空)"}`,
     ...servers.slice(0, 3).map((s) => `- ${s.name} cpu=${Math.round(toNumber(s.cpu))}`),
   ];
