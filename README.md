@@ -1,6 +1,6 @@
 # cfsm-egern-widget
 
-[CF-Server-Monitor](https://github.com/cf-server-monitor) 探针面板的 **Egern iOS 主屏小组件**。
+[CF-Server-Monitor](https://github.com/huilang-me/CF-Server-Monitor) 探针面板的 **Egern iOS 主屏小组件**。
 配色与指标口径沿用主题 [CFSM-Theme-LuminaPlus](https://github.com/volcano-1025/CFSM-Theme-LuminaPlus)。
 
 支持三个主屏尺寸，一个脚本全包：
@@ -70,7 +70,7 @@ https://raw.githubusercontent.com/volcano-1025/cfsm-egern-widget/main/cfsm-statu
 | `CARRIER` | `auto` | 延迟与丢包看哪条线路：`ct`/`电信`、`cu`/`联通`、`cm`/`移动`、`bd`。`auto` 在三网里取延迟最低的一条 |
 | `LOSS_WINDOW` | `hour` | 丢包按哪个口径算：`hour` 取最近一小时的均值，`now` 换回「最后一次探测」的瞬时值 |
 | `SORT` | `order` | 没写 `NODES` 时的排序。`order` 跟随后台的「服务器排序」；`health` 改成离线优先、其次 CPU 从高到低 |
-| `BACKGROUND` | `system` | 背景：`system` 交给系统材质、`glass` 压一层灰色渐变、`solid` 不透明主题底色 |
+| `BACKGROUND` | `system` | 背景：`system` 交给系统材质、`glass` 压一层灰色渐变、`solid` 不透明主题底色、`clear` 全透明（**真机上并不透明**，见「限制」） |
 | `LATENCY_STYLE` | `text` | 延迟数值的画法：`text` 数字染成延迟色；`chip` 延迟色当底、数字用正文色（更清楚但更花） |
 | `ROWS` | 中 5 / 大 9 | 列表最多显示几行 |
 | `REFRESH` | `1` | 期望的刷新间隔（分钟）。iOS 有刷新预算，实际间隔通常被系统拉长，写小了也不会更快 |
@@ -190,6 +190,9 @@ npm run preview # 生成 preview-{small,medium,large,errors}.html
 
 `cfsm-status.js` 必须保持**单文件、无依赖**——Egern 是按 `script_url` 远程加载它的，没有打包步骤。
 文件里的具名导出只给测试用，Egern 只取 `export default`。
+
+改代码前先看 [CLAUDE.md](CLAUDE.md)：踩过的真机坑（行必须定高、小尺寸的行结构、
+image 不收远程 URL、做不出真透明）都记在那里，预览里全都看不出来。
 
 `test/dsl-schema.js` 是 Egern DSL 的属性白名单，逐条抄自
 [官方文档](https://egernapp.com/zh-CN/docs/configuration/widgets/)。脚本是没有类型检查的纯 JS，
