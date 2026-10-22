@@ -173,9 +173,8 @@ const GLASS_GRADIENT = {
  * 默认背景：iOS 系统小组件的标准底色（浅 #ffffff / 深 #1c1c1e）。
  *
  * 显式画出来而不是留空：留空时底色由宿主决定，Egern 和 Scriptable 各垫各的，同一块主屏上和别的
- * 小组件对不齐。这组值与同主屏的 CDT 小组件（cdt-monitor-egern 的 COLOR.card）一致。
- * 显式画了也不妨碍 iOS 26「透明」外观 —— 那个外观下系统会把背景整个换成玻璃（CDT 小组件同样
- * 写死了底色，真机截图里照样是玻璃）。
+ * 小组件对不齐。显式画了也不妨碍 iOS 26「透明」外观 —— 那个外观下系统会把背景整个换成玻璃
+ * （真机截图里，写死了同一组底色的其他小组件照样是玻璃）。
  */
 const SYSTEM_BACKGROUND = { light: "#ffffff", dark: "#1c1c1e" };
 

@@ -614,7 +614,7 @@ describe("三个尺寸产出的 DSL", () => {
 
   it("BACKGROUND 决定根节点铺什么背景", async () => {
     for (const family of ["systemSmall", "systemMedium", "systemLarge"]) {
-      // 默认画 iOS 系统小组件的标准底色，和同主屏的 CDT 小组件对齐；不留给宿主各垫各的
+      // 默认画 iOS 系统小组件的标准底色，不留给宿主各垫各的
       const system = await render(ctxWith({ family, env: { NODE: "hk-01" } }), NOW);
       expect(validateTree(system)).toEqual([]);
       expect(system.backgroundGradient).toBeUndefined();

@@ -314,7 +314,7 @@ describe("renderWidget：用 Scriptable 的 Request 取数", () => {
 });
 
 describe("loader.js：粘进 Scriptable 的那一段", () => {
-  const REPO = "https://raw.githubusercontent.com/volcano-1025/cfsm-egern-widget/main/";
+  const REPO = "https://raw.githubusercontent.com/volcano-1025/cfsm-widget/main/";
   const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
   const GLOBAL_NAMES = [
     "FileManager",

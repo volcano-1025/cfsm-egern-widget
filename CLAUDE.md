@@ -1,4 +1,4 @@
-# cfsm-egern-widget
+# cfsm-widget
 
 [CF-Server-Monitor](https://github.com/huilang-me/CF-Server-Monitor) 探针面板的 iOS 主屏小组件，
 适配小 / 中 / 大三个尺寸。Egern 直接跑 `cfsm-status.js`；Scriptable 版跑的也是这同一份，

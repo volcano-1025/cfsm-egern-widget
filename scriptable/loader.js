@@ -1,5 +1,5 @@
 // CF-Server-Monitor 小组件 · Scriptable 版
-// https://github.com/volcano-1025/cfsm-egern-widget
+// https://github.com/volcano-1025/cfsm-widget
 //
 // 整段粘进 Scriptable 的新脚本里，只改下面 CONFIG 这一块。
 // Scriptable 没有环境变量：这里填的是所有小组件共用的配置（相当于 Egern 填在脚本上的 env），
@@ -13,7 +13,7 @@ const CONFIG = {
 // ---- 下面不用改 ----
 // 真正的代码从仓库下载并缓存在本机，一天最多更新一次；在 App 里手动运行一次会立刻更新。
 
-const REPO = "https://raw.githubusercontent.com/volcano-1025/cfsm-egern-widget/main/";
+const REPO = "https://raw.githubusercontent.com/volcano-1025/cfsm-widget/main/";
 const FILES = ["scriptable/runtime.js", "cfsm-status.js"];
 const MAX_AGE_MS = 24 * 3600 * 1000;
 
