@@ -39,8 +39,9 @@ Egern 的**小组件画廊**、Scriptable 里直接运行，或加 `DEBUG=1` 渲
   `date` 不在行尾，真机上整块渲染不出来（只剩一个旗帜），而预览里看不出来
 - `image.src` 不支持远程 URL（只收 `sf-symbol:` / Base64 / 内联 SVG），旗帜只能用 emoji
 - 颜色只收 hex 或 `rgba()`，不认 `hsl()`；自适应色写 `{ light, dark }`
-- **做不出真透明**。真机验证过：Egern 自己铺了一层不透明容器底，`rgba(0,0,0,0)` 出来也是
-  浅灰。DSL 没有模糊原语
+- **自己画不出透明**（Egern 铺了不透明容器底，`rgba(0,0,0,0)` 也是浅灰）。玻璃底只有 iOS 26 主屏
+  「透明」外观能给，而它会把**所有颜色抹成白色、只保留透明度** —— 只靠颜色区分的元素（如进度条
+  轨道）必须带 alpha，否则和填充段一起变成白杠（真机截图验证过）
 - **只准发 `GET {API_BASE}/api/servers`**，绝不碰 `/api/history/all` —— 逐节点查历史会让
   后端 D1 读行翻几十倍（主题也禁止在概览场景用它）
 - 改延迟/丢包配色、在线判定、字节格式化之前，先对照主题的 `src/utils/metricTone.ts`、
@@ -59,4 +60,4 @@ Egern 的**小组件画廊**、Scriptable 里直接运行，或加 `DEBUG=1` 渲
 
 未验证的遗留项（需要真机确认，见 README「限制」）：中尺寸 5 行 / 大尺寸 9 行在比
 iPhone 14 Pro 矮的机型上会不会裁掉最后一行；README 安装步骤里的 Egern App 字段名；
-**Scriptable 版整体没上过真机**（排版换算、`new Function` 能否执行、`widget.url` 点按跳转）。
+Scriptable 版已在真机跑通（2026-10 截图），点按跳转未确认。

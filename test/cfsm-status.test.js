@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  COLORS,
   deriveStats,
   flagEmoji,
   formatBytes,
@@ -10,6 +11,7 @@ import {
   lossColor,
   metricsOf,
   normalizeCarrier,
+  normalizeFlag,
   normalizeLossWindow,
   pickList,
   pickOne,
@@ -106,6 +108,43 @@ describe("flagEmoji", () => {
     expect(flagEmoji(null)).toBe("");
     expect(flagEmoji("CHN")).toBe("");
     expect(flagEmoji("1A")).toBe("");
+  });
+});
+
+describe("iOS 26 主屏「透明」外观", () => {
+  // 这个外观下系统把所有颜色抹成白色、只保留透明度。只靠颜色区分的东西会糊成一片：
+  // 真机截图里不透明的进度条轨道和填充段一起变成了整条白杠。
+  it("进度条轨道带透明度，填充段才能和轨道分开", () => {
+    for (const scheme of ["light", "dark"]) {
+      const alpha = /^rgba\(.*,\s*([\d.]+)\)$/.exec(COLORS.track[scheme])?.[1];
+      expect(Number(alpha), scheme).toBeLessThan(0.5);
+    }
+  });
+
+  it("FLAG 认得 code / none，其余一律 emoji", () => {
+    expect(normalizeFlag("code")).toBe("code");
+    expect(normalizeFlag("文字")).toBe("code");
+    expect(normalizeFlag("none")).toBe("none");
+    expect(normalizeFlag("不显示")).toBe("none");
+    expect(normalizeFlag("")).toBe("emoji");
+    expect(normalizeFlag("旗帜")).toBe("emoji");
+  });
+
+  it("FLAG=code 把旗帜换成地区代码文字", async () => {
+    for (const family of ["systemSmall", "systemMedium", "systemLarge"]) {
+      const tree = await render(ctxWith({ family, env: { NODE: "hk-01", FLAG: "code" } }), NOW);
+      const texts = collectText(tree);
+      expect(texts, family).toContain("HK");
+      expect(texts.some((t) => /\p{Regional_Indicator}/u.test(t)), family).toBe(false);
+      expect(validateTree(tree), family).toEqual([]);
+    }
+  });
+
+  it("FLAG=none 什么都不放，默认还是 emoji", async () => {
+    const none = collectText(await render(ctxWith({ env: { FLAG: "none" } }), NOW));
+    expect(none.some((t) => t === "HK" || /\p{Regional_Indicator}/u.test(t))).toBe(false);
+    const byDefault = collectText(await render(ctxWith(), NOW));
+    expect(byDefault).toContain("🇭🇰");
   });
 });
 

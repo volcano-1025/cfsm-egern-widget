@@ -45,7 +45,10 @@ const COLORS = {
   text: { light: "#18181b", dark: "#d1d7e0" }, // --text-primary
   textSub: { light: "#52525b", dark: "#b7bdc8" }, // --text-secondary
   textDim: { light: "#71717a", dark: "#9198a1" }, // --text-tertiary
-  track: { light: "#e4e4e7", dark: "#343b45" }, // --progress-bg
+  // --progress-bg（浅 #e4e4e7 / 深 #343b45）换算成半透明：叠在系统白 / 黑底上看着和原值几乎一样。
+  // 必须带透明度 —— iOS 26 主屏「透明」外观下系统把所有颜色抹成白色、只保留透明度，
+  // 不透明的轨道会和填充段一起变成整条白杠，进度条就读不出数了（真机截图验证过）。
+  track: { light: "rgba(24, 24, 27, 0.12)", dark: "rgba(118, 130, 146, 0.30)" },
   cpu: { light: "#3b82f6", dark: "#539bf5" }, // --progress-cpu
   mem: { light: "#8b5cf6", dark: "#b083f0" }, // --progress-memory
   disk: { light: "#e97b35", dark: "#e0823d" }, // --progress-disk
@@ -282,6 +285,19 @@ export function formatLoss(pct) {
 export function normalizeLossWindow(raw) {
   const key = String(raw ?? "").trim().toLowerCase();
   return /^(now|instant|实时|瞬时|当前)$/.test(key) ? "now" : "hour";
+}
+
+/**
+ * FLAG 环境变量 → 机器名前面的地区标记。认不出来的一律当 emoji。
+ *
+ * `code` 换成「HK」这样的地区代码文字：iOS 26 主屏「透明」外观下 emoji 旗帜会被系统抹成一块
+ * 白色剪影，国区系统也不显示 🇹🇼，文字在哪种情况下都读得出来。`none` 干脆不显示。
+ */
+export function normalizeFlag(raw) {
+  const key = String(raw ?? "").trim().toLowerCase();
+  if (/^(code|text|代码|文字|地区码)$/.test(key)) return "code";
+  if (/^(none|off|no|0|无|不显示|关)$/.test(key)) return "none";
+  return "emoji";
 }
 
 /** SORT 环境变量 → 排序方式。认不出来的一律当 order（跟随后台）。 */
@@ -537,6 +553,7 @@ export function readEnv(ctx) {
     group: String(env.GROUP ?? "").trim(),
     title: String(env.TITLE ?? "").trim() || "服务器状态",
     carrier: normalizeCarrier(env.CARRIER),
+    flag: normalizeFlag(env.FLAG),
     lossWindow: normalizeLossWindow(env.LOSS_WINDOW),
     sort: normalizeSort(env.SORT),
     background: normalizeBackground(env.BACKGROUND),
@@ -731,6 +748,18 @@ function latencyValue(ms, { width, size, style, suffix = "" }) {
   };
 }
 
+/** 机器名前的地区标记；拿不到地区或 FLAG=none 时返回 null，调用方直接不放。 */
+function regionMark(region, style, size) {
+  if (style === "none") return null;
+  if (style === "code") {
+    const code = String(region ?? "").trim().toUpperCase();
+    if (!/^[A-Z]{2}$/.test(code)) return null;
+    return text(code, { size: size - 3, weight: "semibold", color: COLORS.textDim });
+  }
+  const flag = flagEmoji(region);
+  return flag ? text(flag, { size }) : null;
+}
+
 function statusDot(online) {
   return text("●", { size: 7, color: online ? COLORS.online : COLORS.offline });
 }
@@ -802,10 +831,11 @@ function nodeRow(
     lossWindow = "hour",
     height = 16,
     latencyStyle = "chip",
+    flagStyle = "emoji",
   } = {},
 ) {
   const m = metricsOf(server, now, carrier, lossWindow);
-  const flag = flagEmoji(server.region);
+  const flag = regionMark(server.region, flagStyle, dense ? 11 : 10);
   const nameColor = m.online ? COLORS.text : COLORS.textDim;
   const barWidth = dense ? 30 : 22;
   // 26 是「100%」在 9pt 下的实测占宽，再窄就会顶到后面的延迟列。
@@ -813,7 +843,7 @@ function nodeRow(
   const pctSize = 9;
 
   const children = [statusDot(m.online)];
-  if (flag) children.push(text(flag, { size: dense ? 11 : 10 }));
+  if (flag) children.push(flag);
   children.push(
     text(server.name ?? "", {
       size: dense ? 11 : 10,
@@ -875,10 +905,10 @@ function nodeRow(
  */
 function renderSmall(server, { now, refreshAfter, apiBase, env }) {
   const m = metricsOf(server, now, env.carrier, env.lossWindow);
-  const flag = flagEmoji(server.region);
+  const flag = regionMark(server.region, env.flag, 12);
 
   const header = [statusDot(m.online)];
-  if (flag) header.push(text(flag, { size: 12 }));
+  if (flag) header.push(flag);
   header.push(
     text(server.name ?? "", {
       size: 13,
@@ -1006,6 +1036,7 @@ function renderMedium(servers, stats, { now, refreshAfter, apiBase, env }) {
           lossWindow: env.lossWindow,
           height,
           latencyStyle: env.latencyStyle,
+          flagStyle: env.flag,
         })),
       { type: "spacer" },
     ],
@@ -1117,6 +1148,7 @@ function renderLarge(servers, stats, { now, refreshAfter, apiBase, env }) {
           lossWindow: env.lossWindow,
           height,
           latencyStyle: env.latencyStyle,
+          flagStyle: env.flag,
         })),
       { type: "spacer" },
       divider(),
