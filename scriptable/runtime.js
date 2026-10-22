@@ -313,9 +313,8 @@ function addChildren(container, children, parent, api, path, onUnknown) {
     if (parent.direction === "row") {
       const fills = child.flex != null || (parent.width != null && list.length === 1);
       const element = addAligned(container, child, fills ? child.textAlign ?? "left" : null, api);
-      // 定宽单元里的数字：Scriptable 的弹性 spacer 自带约 8pt 的最小长度（SwiftUI Spacer 的默认值），
-      // 26pt 的格子只剩 18pt，「65%」就被截成「6…」。Egern 没有这个毛病，所以核心脚本没给这些数字
-      // 设缩放；这里补上，放不下时缩字而不是截断。
+      // 定宽单元里的数字：spacer 的最小长度已经在 addStack 里用负间距抵掉了（见 SPACER_MIN_LENGTH），
+      // 这里再兜一层底 —— 万一还是放不下，缩字而不是截成「6…」。
       if (parent.width != null) {
         if (child.maxLines == null) element.lineLimit = 1;
         if (child.minScale == null) element.minimumScaleFactor = 0.5;
@@ -406,6 +405,12 @@ function addStack(container, node, api, path, onUnknown) {
     return stack;
   }
 
+  // 定宽单元（一段文字靠弹性 spacer 摆到右边 / 中间）：用负的间距抵掉 spacer 自带的最小长度。
+  // 不抵的话 24pt 的格子只剩 16pt，两位数的百分比被缩小、一位数的不缩，同一列字号大小不一。
+  if (direction === "row" && node.width != null && isSingleText(node)) {
+    stack.spacing = (node.gap ?? 0) - SPACER_MIN_LENGTH;
+  }
+
   addChildren(
     stack,
     node.children,
@@ -420,6 +425,18 @@ function addStack(container, node, api, path, onUnknown) {
     stack.addSpacer();
   }
   return stack;
+}
+
+/**
+ * Scriptable 弹性 spacer 自带的最小长度。它的 addSpacer() 对应 SwiftUI 的 Spacer()，
+ * 默认最小长度是系统间距 8pt。真机截图反推：26pt 的格子放不下 9pt 的「19%」（约 18pt 宽），
+ * 而格子右沿和文字右沿是对齐的 —— 被吃掉的正是左边 spacer 的那 8pt。
+ */
+const SPACER_MIN_LENGTH = 8;
+
+function isSingleText(node) {
+  const kids = node.children ?? [];
+  return kids.length === 1 && (kids[0]?.type === "text" || kids[0]?.type === "date");
 }
 
 function hasFlexibleChild(node) {

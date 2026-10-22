@@ -216,6 +216,16 @@ describe("DSL → ListWidget", () => {
     expect(cell.items[1].value).toBe("42%");
   });
 
+  it("定宽单元用负间距抵掉 spacer 的最小长度，同一列的数字字号一致", async () => {
+    // 真机截图：大尺寸 24pt 的格子里「67%」被缩小、「6%」没缩，同一列大小不一
+    const { widget } = await build("systemLarge");
+    const cell = stackOfSize(widget, 24, 0);
+    expect(cell.items.map((item) => item.kind)).toEqual(["spacer", "text"]);
+    expect(cell.spacing).toBe(-8);
+    // 进度条轨道、整行这些不是「定宽单元」的 stack 不受影响
+    expect(stackOfSize(widget, 22, 4).spacing).toBe(0);
+  });
+
   it("定宽单元里的数字放不下时缩字，不截成「6…」", async () => {
     // 真机截图：中尺寸 26pt 的内存百分比格子里，两位数被截成了「6…」「19…」
     const { widget } = await build("systemMedium");
