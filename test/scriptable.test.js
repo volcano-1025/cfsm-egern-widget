@@ -178,6 +178,9 @@ describe("DSL → ListWidget", () => {
     expect(widget.refreshAfterDate).toEqual(new Date(dsl.refreshAfter));
     expect(widget.padding).toEqual([15, 15, 15, 15]);
     expect(widget.spacing).toBe(5);
+    // 默认底色显式画出来，不用 Scriptable 自己垫的那层（全透明时它垫的是纯黑）
+    expect(widget.backgroundColor.light.hex).toBe("#ffffff");
+    expect(widget.backgroundColor.dark.hex).toBe("#1c1c1e");
   });
 
   it("进度条按占比换算成像素：42% 的 50pt 轨道 → 21 + 29", async () => {

@@ -614,11 +614,11 @@ describe("三个尺寸产出的 DSL", () => {
 
   it("BACKGROUND 决定根节点铺什么背景", async () => {
     for (const family of ["systemSmall", "systemMedium", "systemLarge"]) {
-      // 默认什么都不铺：Egern 的容器底本来就是不透明的，再压一层灰只会更脏
+      // 默认画 iOS 系统小组件的标准底色，和同主屏的 CDT 小组件对齐；不留给宿主各垫各的
       const system = await render(ctxWith({ family, env: { NODE: "hk-01" } }), NOW);
       expect(validateTree(system)).toEqual([]);
       expect(system.backgroundGradient).toBeUndefined();
-      expect(system.backgroundColor).toBeUndefined();
+      expect(system.backgroundColor).toEqual({ light: "#ffffff", dark: "#1c1c1e" });
 
       const glass = await render(
         ctxWith({ family, env: { NODE: "hk-01", BACKGROUND: "glass" } }),
