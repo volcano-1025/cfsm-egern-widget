@@ -213,6 +213,16 @@ describe("DSL → ListWidget", () => {
     expect(cell.items[1].value).toBe("42%");
   });
 
+  it("定宽单元里的数字放不下时缩字，不截成「6…」", async () => {
+    // 真机截图：中尺寸 26pt 的内存百分比格子里，两位数被截成了「6…」「19…」
+    const { widget } = await build("systemMedium");
+    const cell = stackOfSize(widget, 26, 0);
+    const value = cell.items.at(-1);
+    expect(value.kind).toBe("text");
+    expect(value.lineLimit).toBe(1);
+    expect(value.minimumScaleFactor).toBe(0.5);
+  });
+
   it("chip 样式的延迟：色块里居中，两边各一个 spacer", async () => {
     const { widget } = await build("systemSmall", { NODE: "hk-01", LATENCY_STYLE: "chip" });
     const chip = stackOfSize(widget, 50, 14);

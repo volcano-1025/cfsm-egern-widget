@@ -312,7 +312,14 @@ function addChildren(container, children, parent, api, path, onUnknown) {
     // text / date
     if (parent.direction === "row") {
       const fills = child.flex != null || (parent.width != null && list.length === 1);
-      addAligned(container, child, fills ? child.textAlign ?? "left" : null, api);
+      const element = addAligned(container, child, fills ? child.textAlign ?? "left" : null, api);
+      // 定宽单元里的数字：Scriptable 的弹性 spacer 自带约 8pt 的最小长度（SwiftUI Spacer 的默认值），
+      // 26pt 的格子只剩 18pt，「65%」就被截成「6…」。Egern 没有这个毛病，所以核心脚本没给这些数字
+      // 设缩放；这里补上，放不下时缩字而不是截断。
+      if (parent.width != null) {
+        if (child.maxLines == null) element.lineLimit = 1;
+        if (child.minScale == null) element.minimumScaleFactor = 0.5;
+      }
     } else {
       // 列容器里的文字包一层横向 stack 来落实 alignItems：Scriptable 的竖排对齐不可控，
       // 包了之后这一行带弹性 spacer、会占满整列宽度，方块类容器也因此能被平分宽度。
