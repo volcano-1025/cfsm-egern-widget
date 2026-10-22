@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "CF-Server-Monitor 面板的 Egern iOS 主屏小组件",
+  "description": "CF-Server-Monitor 面板的 iOS 主屏小组件（Egern / Scriptable）",
   "scripts": {
     "test": "vitest run",
     "lint": "eslint .",

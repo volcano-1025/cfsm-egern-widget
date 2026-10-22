@@ -1,6 +1,7 @@
 # cfsm-egern-widget
 
-[CF-Server-Monitor](https://github.com/huilang-me/CF-Server-Monitor) 探针面板的 **Egern iOS 主屏小组件**。
+[CF-Server-Monitor](https://github.com/huilang-me/CF-Server-Monitor) 探针面板的 **iOS 主屏小组件**，
+**Egern** 和 **Scriptable** 都能用（两边跑的是同一份代码，显示内容一样）。
 配色与指标口径沿用主题 [CFSM-Theme-LuminaPlus](https://github.com/volcano-1025/CFSM-Theme-LuminaPlus)。
 
 支持三个主屏尺寸，一个脚本全包：
@@ -11,7 +12,9 @@
 | **中** | 汇总条（在线数、离线数、全站实时速率）+ 5 行节点（CPU、内存、延迟、丢包） |
 | **大** | 标题 + 三块汇总（在线数 / 实时速率 / 累计流量）+ 9 行节点（多一列磁盘）+ 离线名单 |
 
-## 安装
+## 安装（Egern）
+
+用 Scriptable 的跳到下面的[安装（Scriptable）](#安装scriptable)。
 
 ### 第 1 步：创建脚本
 
@@ -112,6 +115,65 @@ widgets:
 
 </details>
 
+## 安装（Scriptable）
+
+Scriptable **没有环境变量**，所以配置换成两处填，填的 key 和上面 Egern 的环境变量表完全一样：
+
+| 填在哪 | 相当于 Egern 的 | 适合放什么 |
+| --- | --- | --- |
+| 脚本顶部的 `CONFIG` | 填在**脚本**上的环境变量，所有小组件共用 | `API_BASE`、`CARRIER` |
+| 主屏上「编辑小组件 → **Parameter**」 | 填在**小组件**上的环境变量，只管这一块 | `NODE`、`ROWS`、`TITLE` |
+
+两处都有时 Parameter 优先。
+
+### 第 1 步：新建脚本
+
+1. 打开 Scriptable，点右上角 **+** 新建一个脚本
+2. 用手机浏览器打开下面这条链接，**全选复制**，粘进刚建的脚本里：
+
+   ```
+   https://raw.githubusercontent.com/volcano-1025/cfsm-egern-widget/main/scriptable/loader.js
+   ```
+
+3. 把开头 `CONFIG` 里的 `API_BASE` 改成你的面板地址（只写 origin，规则同 Egern 版）
+4. 点顶部的脚本名改成 `CFSM`（随便起，第 3 步要选），点 **Done**
+
+粘进去的只是一段 50 多行的加载器。真正的代码由它从本仓库下载、缓存在手机上，
+所以**以后更新不用重新粘**。
+
+### 第 2 步：在 App 里运行一次
+
+点右下角 ▶︎ 运行，选一个尺寸预览。这一步顺带把代码下载下来，看到正常的卡片再去加主屏。
+
+### 第 3 步：加到主屏
+
+1. 长按主屏幕空白处，点击左上角 **+**，搜索 **Scriptable**，选尺寸后添加
+2. 长按这个小组件 → **编辑小组件**
+3. **Script** 选 `CFSM`；**Parameter** 按需填（不填就用 `CONFIG` 里的配置）
+
+**When Interacting** 不用改：脚本自己设了点按地址，点小尺寸进那台机器的详情页、点中/大尺寸进首页。
+
+### Parameter 的写法
+
+`KEY=值`，多条用**分号**隔开（不能用逗号 —— `NODES` 自己就是逗号分隔的）：
+
+| 想要 | Parameter 填 |
+| --- | --- |
+| 小尺寸固定看某台 | `NODE=hk-01`，或者直接写 `hk-01` |
+| 再指定线路 | `NODE=hk-01; CARRIER=电信` |
+| 中尺寸只看某个分组 | `GROUP=亚洲` |
+| 中/大尺寸固定列表 | `NODES=hk-01,jp-tokyo,us-la` |
+| `CONFIG` 里没填地址 | `https://status.example.com; hk-01`（网址开头的一段自动当 `API_BASE`） |
+
+key 不分大小写；中文输入法打出的全角 `；`、`＝` 和中文引号也认。
+
+### 更新
+
+加载器缓存的代码**一天更新一次**。想马上拿到新版本，在 Scriptable 里**手动运行一次**这个脚本
+（App 里运行总是会重新下载）。下载失败时继续用上次的缓存，不会变成报错卡片。
+
+加载器本身（粘进去的那一段）不会自动更新；它几乎不用改，真改了会在这里写明。
+
 ## 装不上？按现象对
 
 先看**小组件画廊**里那一块渲染成什么样 —— 画廊里就是真机的渲染结果，主屏上看到的一模一样。
@@ -128,8 +190,10 @@ widgets:
 | 站点已开启人机验证 | 后台开了全局 Turnstile | 小组件不支持，见「限制」 |
 | 未找到节点 xxx | `NODE` 没匹配上 | 填后台里的机器 id，或名称的一段（不区分大小写） |
 | 最后一行缺一截 | 机型比参考尺寸矮 | 把 `ROWS` 调小一档 |
+| Scriptable：红字「CFSM 小组件加载失败」 | 第一次下载代码就没成功（还没有缓存可用） | 确认手机能打开 raw.githubusercontent.com，然后在 App 里运行一次 |
+| Scriptable：Parameter 填了不生效 | 用了逗号分隔多条，或 key 拼错 | 多条之间用分号；key 照环境变量表写 |
 
-还是定位不了，给那个小组件的环境变量加一条 `DEBUG` = `1`：它会改渲染一棵最小的排查树
+还是定位不了，给那个小组件的环境变量（Scriptable 是 Parameter）加一条 `DEBUG` = `1`：它会改渲染一棵最小的排查树
 （只有一段纯文本，列出 family、后端域名、拿到几台机器，以及一小时丢包窗口拿到几格 ——
 写着「窗口 0 格」就是后端版本太低或者没探测这台，丢包会回落到瞬时值）。
 **能出文字**说明取数和渲染都通、问题在版式；**还是空白**说明脚本压根没跑起来，
@@ -172,6 +236,10 @@ widgets:
   iPad 上比 iPhone 高，一个没定高的行会独吞整块空档，把它下面的内容全挤到底部。
   代价是行数超了会被裁掉而不是压缩：默认行数按 iPhone 14 Pro 那档留了余量，
   如果你的机型看到最后一行缺一截，把 `ROWS` 调小一档即可。
+- **Scriptable 版还没上过真机。** 两边是同一份 DSL，但 Scriptable 的布局里没有 flex，
+  运行时做了换算：进度条按轨道宽度算成像素，汇总方块靠弹性 spacer 平分宽度。逻辑有测试兜着，
+  实际排版和 Egern 版可能差一两个点；发现哪里不对，截图对照着改 `scriptable/runtime.js`。
+  Scriptable 同样做不出透明背景，默认是系统的白 / 黑底。
 - 每次刷新只发一个请求 `GET {API_BASE}/api/servers`，不碰历史接口 —— 逐节点查历史会让后端
   D1 读行翻几十倍。
 
@@ -190,6 +258,14 @@ npm run preview # 生成 preview-{small,medium,large,errors}.html
 
 `cfsm-status.js` 必须保持**单文件、无依赖**——Egern 是按 `script_url` 远程加载它的，没有打包步骤。
 文件里的具名导出只给测试用，Egern 只取 `export default`。
+
+Scriptable 版不另写一份小组件：
+
+- `scriptable/loader.js` —— 用户粘进 App 的那段，只负责下载、缓存、执行下面两个文件
+- `scriptable/runtime.js` —— 拼出 Egern 风格的 `ctx`，执行 `cfsm-status.js`，再把它返回的 DSL
+  翻成 Scriptable 的 `ListWidget`。它是一个**函数体**（加载器用 `new Function` 执行），没有 import/export
+- `test/scriptable.test.js` 用一套假的 Scriptable API 把「加载器 → 运行时 → 核心脚本」整条链跑通，
+  还会检查核心脚本用到的每个 DSL 属性运行时都翻译了 —— 漏一个，Scriptable 上就会静默丢掉
 
 改代码前先看 [CLAUDE.md](CLAUDE.md)：踩过的真机坑（行必须定高、小尺寸的行结构、
 image 不收远程 URL、做不出真透明）都记在那里，预览里全都看不出来。

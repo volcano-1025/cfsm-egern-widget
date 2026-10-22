@@ -1,6 +1,23 @@
 import js from "@eslint/js";
 import globals from "globals";
 
+const SCRIPTABLE_GLOBALS = Object.fromEntries(
+  [
+    "Alert",
+    "Color",
+    "FileManager",
+    "Font",
+    "LinearGradient",
+    "ListWidget",
+    "Point",
+    "Request",
+    "Script",
+    "Size",
+    "args",
+    "config",
+  ].map((name) => [name, "readonly"]),
+);
+
 export default [
   { ignores: ["node_modules", "preview.html"] },
   js.configs.recommended,
@@ -14,6 +31,18 @@ export default [
       globals: globals.es2021,
     },
   },
+  {
+    // Scriptable 的 JS 运行时：标准内置对象 + Scriptable 自己的全局 API，没有 DOM / Node。
+    // runtime.js 由加载器用 new Function 执行，是一个函数体（末尾有顶层 return），所以按 commonjs 解析；
+    // loader.js 是直接粘进 App 的脚本，用了顶层 await，按 module 解析。
+    files: ["scriptable/**/*.js"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      globals: { ...globals.es2021, ...SCRIPTABLE_GLOBALS },
+    },
+  },
+  { files: ["scriptable/runtime.js"], languageOptions: { sourceType: "commonjs" } },
+  { files: ["scriptable/loader.js"], languageOptions: { sourceType: "module" } },
   {
     files: ["tools/**/*.mjs", "test/**/*.js", "eslint.config.js"],
     languageOptions: {

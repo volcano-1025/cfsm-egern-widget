@@ -17,6 +17,11 @@
  * 必须保持单文件、无依赖：Egern 通过 script_url 远程加载本文件，没有打包步骤。
  * 文件末尾的具名导出只给单元测试用，Egern 只取 default。
  *
+ * Scriptable 版也跑这同一份文件：scriptable/runtime.js 把它当函数体执行（所以不许有 import，
+ * 导出只能是 `export function` / `export default` / `export { … }` 三种写法），再把这里返回的
+ * DSL 翻成 Scriptable 的 ListWidget。新用到的 DSL 元素或属性要在 runtime.js 里补上翻译，
+ * test/scriptable.test.js 会把漏掉的报出来。
+ *
  * 与 CFSM-Theme-LuminaPlus 主题保持一致的口径（主题改了这几处要跟着改）：
  *   - 在线判定：`is_online` 是布尔值时以它为准，否则 now - last_updated < 5 分钟
  *     （主题 src/services/cfsm/mappers.ts 的 isServerOnline / ONLINE_THRESHOLD_MS）
@@ -1200,7 +1205,8 @@ export async function render(ctx, now = Date.now()) {
     return renderError("未配置 API_BASE", {
       refreshAfter,
       background: env.background,
-      hint: "在 Egern 的 widget env 里填后端地址，例如 https://status.example.com",
+      // 文案不点名宿主：同一份脚本也跑在 Scriptable 上，那边填的是脚本顶部的 CONFIG 或小组件 Parameter。
+      hint: "填上面板地址，例如 https://status.example.com",
     });
   }
 
